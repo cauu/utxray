@@ -2,27 +2,44 @@
 
 ## Environment
 
-- **Git revision**: `b672ac33fdbe85b7d2712e147852a12f4800ac43`
+- **Git revision**: `4c1284e3db99f5423d5c4c8a5032e9060f0085a3`
 - **Rust version**: `rustc 1.85.0 (4d91de4e4 2025-02-17)`
 - **OS / arch**: Darwin 24.5.0 arm64 (macOS, Apple Silicon)
-- **Phase reached**: Phase 1
+- **Phase reached**: Phase 1 (v1 core complete)
 
 ## Quality gate results
 
-| Check | Command | Exit code | Result |
-|---|---|---|---|
-| Workspace compiles | `cargo check --workspace` | 0 | PASS |
-| Zero clippy warnings | `cargo clippy --workspace -- -D warnings` | 0 | PASS |
-| Formatting clean | `cargo fmt --all -- --check` | 1 | FAIL (2 minor diffs in cli_tx_test.rs) |
-| All tests pass | `cargo test --workspace` | 0 | PASS |
-| No unwrap/panic in core | grep count = 0 | 0 | PASS |
-| No std::process::Command | grep count = 0 | 0 | PASS |
+| Check | Command | Result |
+|---|---|---|
+| Workspace compiles | `cargo check --workspace` | PASS |
+| Zero clippy warnings | `cargo clippy --workspace -- -D warnings` | PASS |
+| Formatting clean | `cargo fmt --all -- --check` | PASS |
+| All tests pass | `cargo test --workspace` | PASS |
+| No unwrap/panic in core | grep count = 0 | PASS |
+| No std::process::Command | grep count = 0 | PASS |
+
+## verify.sh Phase 1 result
+
+```json
+{
+  "all_pass": true,
+  "cross_cutting": {
+    "cargo_check": true, "cargo_clippy": true, "cargo_fmt": true,
+    "cargo_test": true, "no_forbidden_patterns": true,
+    "unwrap_count": 0, "std_process_count": 0
+  },
+  "phase_checks": {
+    "fixtures_exist": true, "coverage_updated": true,
+    "report_updated": true, "min_test_count": true
+  }
+}
+```
 
 ## Test summary
 
-- **Total tests**: 178 (141 unit + 37 integration)
-- **Passed**: 173
-- **Ignored**: 5 (require aiken CLI: build success x2, typecheck success, typecheck module filter, test with aiken)
+- **Total tests**: 179 (141 unit + 38 integration)
+- **Passed**: 174
+- **Ignored**: 5 (require aiken CLI)
 - **Failed**: 0
 
 ### Integration test breakdown by command
@@ -70,7 +87,7 @@
 | Criterion | Status |
 |---|---|
 | Zero clippy warnings | PASS |
-| Zero fmt diffs | FAIL (2 minor formatting diffs in test file) |
+| Zero fmt diffs | PASS |
 | Workspace tests pass | PASS |
 | No unwrap/panic in core | PASS |
 | No std::process::Command | PASS |
@@ -86,12 +103,11 @@
 2. `trace` validates inputs but does not execute validators (see DEV-001 in deviations.md).
 3. `tx build` produces JSON description rather than CBOR (see DEV-002 in deviations.md).
 4. `script-data-hash` uses JSON serialization for hash input rather than CBOR (see DEV-003 in deviations.md).
-5. `cargo fmt` reports 2 minor formatting differences in `cli_tx_test.rs`.
 
 ## Verdicts
 
 - **Phase 0 complete**: yes
-- **Phase 1 complete**: yes (with fmt caveat — 2 cosmetic diffs in test file)
-- **Core v1 complete**: yes (pending fmt fix)
+- **Phase 1 complete**: yes
+- **Core v1 complete**: yes
 - **Phase 2 complete**: not-in-scope
 - **Phase 3 complete**: not-in-scope
