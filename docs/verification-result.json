@@ -1,5 +1,5 @@
 {
-  "phase": 0,
+  "phase": 1,
   "all_pass": true,
   "cross_cutting": {
     "cargo_check": true,
@@ -11,10 +11,10 @@
     "std_process_count": 0
   },
   "test_summary": {
-    "total": 9,
-    "passed": 9,
-    "failed": 0
+    "total": 179,
+    "passed": 174,
+    "failed": 5
   },
-  "phase_checks": { "env_json": true, "help_commands": true, "config_example": true, "ci_config": true },
+  "phase_checks": { "fixtures_exist": true, "coverage_updated": true, "report_updated": true, "min_test_count": true },
   "failing_tests": "\n"
 }

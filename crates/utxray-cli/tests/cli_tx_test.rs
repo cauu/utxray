@@ -66,7 +66,10 @@ fn test_tx_build_valid_spec() {
     assert!(parsed["summary"]["estimated_fee"].is_number());
 
     if let Some(tx_file) = parsed["tx_file"].as_str() {
-        assert!(Path::new(tx_file).exists(), "tx_file should exist: {tx_file}");
+        assert!(
+            Path::new(tx_file).exists(),
+            "tx_file should exist: {tx_file}"
+        );
     }
 
     cleanup(&dir);
@@ -161,10 +164,7 @@ fn test_tx_build_missing_spec_flag() {
 
 #[test]
 fn test_tx_build_malformed_json_spec() {
-    let dir = std::env::temp_dir().join(format!(
-        "utxray_test_malformed_{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("utxray_test_malformed_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let spec_path = dir.join("bad_spec.json");
     std::fs::write(&spec_path, "not valid json {{{").unwrap();
