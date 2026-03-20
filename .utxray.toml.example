@@ -1,0 +1,23 @@
+[network]
+default = "preview"
+
+[backend]
+primary = "blockfrost"
+query = "blockfrost"
+evaluator = "ogmios"
+
+[ogmios]
+host = "127.0.0.1"
+port = 1337
+
+[blockfrost]
+project_id = "previewXXXXXXXXXXX"
+
+[agent]
+context_path = ".utxray/context.json"
+auto_update_context = true
+
+[defaults]
+trace_level = "verbose"
+format = "json"
+include_raw = false

@@ -1,0 +1,20 @@
+[package]
+name = "utxray"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "utxray"
+path = "src/main.rs"
+
+[dependencies]
+utxray-core = { path = "../utxray-core" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
