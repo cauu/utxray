@@ -1,0 +1,113 @@
+{
+  "preamble": {
+    "title": "test/escrow",
+    "description": "An escrow contract for testing schema validation",
+    "version": "0.0.1",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.0"
+    },
+    "license": "Apache-2.0"
+  },
+  "validators": [
+    {
+      "title": "escrow.escrow.spend",
+      "datum": {
+        "title": "datum",
+        "schema": {
+          "$ref": "#/definitions/escrow~1EscrowDatum"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/escrow~1EscrowAction"
+        }
+      },
+      "compiledCode": "deadbeef",
+      "hash": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+    },
+    {
+      "title": "escrow.token.mint",
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/escrow~1MintAction"
+        }
+      },
+      "compiledCode": "cafebabe",
+      "hash": "11223344112233441122334411223344112233441122334411223344"
+    }
+  ],
+  "definitions": {
+    "ByteArray": {
+      "dataType": "bytes"
+    },
+    "Int": {
+      "dataType": "integer"
+    },
+    "escrow/EscrowDatum": {
+      "title": "EscrowDatum",
+      "description": "The datum for the escrow contract",
+      "anyOf": [
+        {
+          "title": "EscrowDatum",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "owner",
+              "description": "The owner's verification key hash (28 bytes)",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "deadline",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "amount",
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        }
+      ]
+    },
+    "escrow/EscrowAction": {
+      "title": "EscrowAction",
+      "description": "The redeemer for the escrow contract",
+      "anyOf": [
+        {
+          "title": "Unlock",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "Cancel",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "escrow/MintAction": {
+      "title": "MintAction",
+      "description": "The redeemer for the minting policy",
+      "anyOf": [
+        {
+          "title": "Mint",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "Burn",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    }
+  }
+}
