@@ -10,6 +10,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 pallas-codec = "0.30"
 pallas-primitives = "0.30"
+pallas-crypto = "0.30"
 pallas-traverse = "0.30"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

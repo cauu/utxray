@@ -1,5 +1,7 @@
 use clap::{Args, Subcommand};
 use utxray_core::cbor::decode::{decode_cbor_hex, DecodeErrorData};
+use utxray_core::cbor::redeemer_index::{analyze_redeemer_index, RedeemerIndexErrorData};
+use utxray_core::cbor::script_data_hash::{compute_script_data_hash, ScriptDataHashErrorData};
 use utxray_core::output::{print_output, Output};
 
 use crate::context::AppContext;
@@ -90,15 +92,79 @@ pub async fn handle_cbor(cmd: CborCommands, _ctx: &AppContext) -> anyhow::Result
 }
 
 pub async fn handle_script_data_hash(
-    _args: ScriptDataHashArgs,
+    args: ScriptDataHashArgs,
     _ctx: &AppContext,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("command 'script-data-hash' not yet implemented")
+    let redeemers = match &args.redeemers {
+        Some(r) => r.as_str(),
+        None => {
+            let output = Output::error(ScriptDataHashErrorData {
+                error: "missing required argument: --redeemers".to_string(),
+            });
+            print_output(&output)?;
+            return Ok(());
+        }
+    };
+    let datums = match &args.datums {
+        Some(d) => d.as_str(),
+        None => {
+            let output = Output::error(ScriptDataHashErrorData {
+                error: "missing required argument: --datums".to_string(),
+            });
+            print_output(&output)?;
+            return Ok(());
+        }
+    };
+    let cost_models = match &args.cost_models {
+        Some(c) => c.as_str(),
+        None => {
+            let output = Output::error(ScriptDataHashErrorData {
+                error: "missing required argument: --cost-models".to_string(),
+            });
+            print_output(&output)?;
+            return Ok(());
+        }
+    };
+
+    match compute_script_data_hash(redeemers, datums, cost_models) {
+        Ok(output) => {
+            print_output(&output)?;
+        }
+        Err(e) => {
+            let output = Output::error(ScriptDataHashErrorData {
+                error: e.to_string(),
+            });
+            print_output(&output)?;
+        }
+    }
+    Ok(())
 }
 
 pub async fn handle_redeemer_index(
-    _args: RedeemerIndexArgs,
+    args: RedeemerIndexArgs,
     _ctx: &AppContext,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("command 'redeemer-index' not yet implemented")
+    let tx_input = match &args.tx {
+        Some(t) => t.as_str(),
+        None => {
+            let output = Output::error(RedeemerIndexErrorData {
+                error: "missing required argument: --tx (hex string or file path)".to_string(),
+            });
+            print_output(&output)?;
+            return Ok(());
+        }
+    };
+
+    match analyze_redeemer_index(tx_input) {
+        Ok(output) => {
+            print_output(&output)?;
+        }
+        Err(e) => {
+            let output = Output::error(RedeemerIndexErrorData {
+                error: e.to_string(),
+            });
+            print_output(&output)?;
+        }
+    }
+    Ok(())
 }
