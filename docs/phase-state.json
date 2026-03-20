@@ -1,6 +1,8 @@
 {
-  "current_phase": 0,
+  "current_phase": 1,
   "attempt": 1,
-  "phases_completed": [],
+  "phases_completed": [
+    0
+  ],
   "last_failure_summary": null
 }
