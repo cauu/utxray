@@ -9,10 +9,28 @@ fn fixture_path(name: &str) -> String {
         .into_owned()
 }
 
-/// Test that `utxray tx build --spec <valid>` returns status ok with summary.
+/// Copy the tx spec fixture into a unique temp dir so tests don't race on the output file.
+fn setup_tx_spec() -> (std::path::PathBuf, String) {
+    let id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("utxray_tx_test_{id}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok();
+    let spec_src = fixture_path("tx_spec_valid.json");
+    let spec_dst = dir.join("tx_spec.json");
+    std::fs::copy(&spec_src, &spec_dst).ok();
+    let spec_path = spec_dst.to_string_lossy().into_owned();
+    (dir, spec_path)
+}
+
+fn cleanup(dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn test_tx_build_valid_spec() {
-    let spec = fixture_path("tx_spec_valid.json");
+    let (dir, spec) = setup_tx_spec();
 
     let mut cmd = Command::cargo_bin("utxray").unwrap();
     cmd.arg("--project")
@@ -32,7 +50,6 @@ fn test_tx_build_valid_spec() {
     assert_eq!(parsed["v"], "0.1.0");
     assert_eq!(parsed["status"], "ok");
     assert!(parsed["tx_file"].is_string());
-    assert!(parsed["summary"]["inputs_count"].is_number());
     assert_eq!(parsed["summary"]["inputs_count"], 2);
     assert_eq!(parsed["summary"]["outputs_count"], 2);
     assert!(parsed["summary"]["scripts_invoked"].is_array());
@@ -40,36 +57,24 @@ fn test_tx_build_valid_spec() {
     let scripts = parsed["summary"]["scripts_invoked"].as_array().unwrap();
     assert!(!scripts.is_empty());
 
-    // Check that escrow.spend and token.mint are in scripts_invoked
     let names: Vec<&str> = scripts.iter().filter_map(|s| s["name"].as_str()).collect();
-    assert!(
-        names.contains(&"escrow.spend"),
-        "expected escrow.spend in scripts_invoked"
-    );
-    assert!(
-        names.contains(&"token.mint"),
-        "expected token.mint in scripts_invoked"
-    );
+    assert!(names.contains(&"escrow.spend"));
+    assert!(names.contains(&"token.mint"));
 
     assert!(parsed["summary"]["total_input_lovelace"].is_number());
     assert!(parsed["summary"]["total_output_lovelace"].is_number());
     assert!(parsed["summary"]["estimated_fee"].is_number());
 
-    // tx_file should exist on disk
-    let tx_file = parsed["tx_file"].as_str().unwrap();
-    assert!(
-        Path::new(tx_file).exists(),
-        "tx_file should exist: {tx_file}"
-    );
+    if let Some(tx_file) = parsed["tx_file"].as_str() {
+        assert!(Path::new(tx_file).exists(), "tx_file should exist: {tx_file}");
+    }
 
-    // Cleanup
-    let _ = std::fs::remove_file(tx_file);
+    cleanup(&dir);
 }
 
-/// Test that without --include-raw, tx_cbor is NOT in the output.
 #[test]
 fn test_tx_build_no_include_raw_omits_tx_cbor() {
-    let spec = fixture_path("tx_spec_valid.json");
+    let (dir, spec) = setup_tx_spec();
 
     let mut cmd = Command::cargo_bin("utxray").unwrap();
     cmd.arg("--project")
@@ -88,16 +93,12 @@ fn test_tx_build_no_include_raw_omits_tx_cbor() {
     assert_eq!(parsed["status"], "ok");
     assert!(parsed.get("tx_cbor").is_none() || parsed["tx_cbor"].is_null());
 
-    // Cleanup
-    if let Some(tx_file) = parsed["tx_file"].as_str() {
-        let _ = std::fs::remove_file(tx_file);
-    }
+    cleanup(&dir);
 }
 
-/// Test that with --include-raw, tx_cbor IS present in the output.
 #[test]
 fn test_tx_build_include_raw_has_tx_cbor() {
-    let spec = fixture_path("tx_spec_valid.json");
+    let (dir, spec) = setup_tx_spec();
 
     let mut cmd = Command::cargo_bin("utxray").unwrap();
     cmd.arg("--project")
@@ -120,13 +121,9 @@ fn test_tx_build_include_raw_has_tx_cbor() {
         "tx_cbor should be present with --include-raw"
     );
 
-    // Cleanup
-    if let Some(tx_file) = parsed["tx_file"].as_str() {
-        let _ = std::fs::remove_file(tx_file);
-    }
+    cleanup(&dir);
 }
 
-/// Test that an invalid/missing spec file returns status error.
 #[test]
 fn test_tx_build_invalid_spec_file() {
     let mut cmd = Command::cargo_bin("utxray").unwrap();
@@ -147,7 +144,6 @@ fn test_tx_build_invalid_spec_file() {
     assert!(parsed["error_code"].is_string());
 }
 
-/// Test that missing --spec flag returns a structured error.
 #[test]
 fn test_tx_build_missing_spec_flag() {
     let mut cmd = Command::cargo_bin("utxray").unwrap();
@@ -163,10 +159,12 @@ fn test_tx_build_missing_spec_flag() {
     assert_eq!(parsed["error_code"], "MISSING_ARGUMENT");
 }
 
-/// Test with a malformed JSON spec file.
 #[test]
 fn test_tx_build_malformed_json_spec() {
-    let dir = std::env::temp_dir().join("utxray_test_malformed_spec");
+    let dir = std::env::temp_dir().join(format!(
+        "utxray_test_malformed_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let spec_path = dir.join("bad_spec.json");
     std::fs::write(&spec_path, "not valid json {{{").unwrap();
@@ -188,6 +186,5 @@ fn test_tx_build_malformed_json_spec() {
     assert_eq!(parsed["status"], "error");
     assert_eq!(parsed["error_code"], "TX_BUILD_FAILED");
 
-    // Cleanup
     let _ = std::fs::remove_dir_all(&dir);
 }

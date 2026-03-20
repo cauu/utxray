@@ -1,0 +1,31 @@
+{
+  "v": "0.1.0",
+  "status": "mixed",
+  "total": 3,
+  "passed": 2,
+  "failed": 1,
+  "results": [
+    {
+      "name": "test_escrow_claim",
+      "module": "escrow",
+      "result": "pass",
+      "exec_units": { "cpu": 100000, "mem": 50000 },
+      "traces": []
+    },
+    {
+      "name": "test_escrow_refund",
+      "module": "escrow",
+      "result": "pass",
+      "exec_units": { "cpu": 120000, "mem": 60000 },
+      "traces": []
+    },
+    {
+      "name": "test_escrow_deadline",
+      "module": "escrow",
+      "result": "fail",
+      "exec_units": { "cpu": 0, "mem": 0 },
+      "traces": ["deadline check failed: current slot past deadline"],
+      "error_detail": "Script returned False. deadline has passed, validity interval fail"
+    }
+  ]
+}

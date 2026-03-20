@@ -1,15 +1,22 @@
 use clap::Args;
 
+use utxray_core::diagnose;
+use utxray_core::output::print_output;
+
 use crate::context::AppContext;
 
 #[derive(Args, Debug)]
 pub struct DiagnoseArgs {
+    /// Path to result JSON file, or "-" for stdin
     #[arg(long)]
     pub from: Option<String>,
+    /// Optional path to transaction CBOR file
     #[arg(long)]
     pub tx: Option<String>,
 }
 
-pub async fn handle(_args: DiagnoseArgs, _ctx: &AppContext) -> anyhow::Result<()> {
-    anyhow::bail!("command 'diagnose' not yet implemented")
+pub async fn handle(args: DiagnoseArgs, _ctx: &AppContext) -> anyhow::Result<()> {
+    let output = diagnose::run_diagnose(args.from.as_deref()).await?;
+    print_output(&output)?;
+    Ok(())
 }
