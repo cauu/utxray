@@ -1,0 +1,33 @@
+{
+  "preamble": {
+    "title": "test/hello_world",
+    "description": "A minimal Aiken project for testing",
+    "version": "0.0.1",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.0"
+    },
+    "license": "Apache-2.0"
+  },
+  "validators": [
+    {
+      "title": "hello.hello.spend",
+      "datum": {
+        "title": "_datum",
+        "schema": {
+          "$ref": "#/definitions/Data"
+        }
+      },
+      "redeemer": {
+        "title": "_redeemer",
+        "schema": {
+          "$ref": "#/definitions/Data"
+        }
+      },
+      "compiledCode": "58350100003232323232225333003323232533300732323300100137586016601800260126ea8010526153300649011856616c696461746f722072657475726e65642066616c7365001365640016",
+      "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"
+    }
+  ],
+  "definitions": {}
+}

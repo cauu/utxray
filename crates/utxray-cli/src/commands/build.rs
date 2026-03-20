@@ -1,6 +1,7 @@
 use clap::Subcommand;
 
 use crate::context::AppContext;
+use utxray_core::output::print_output;
 
 #[derive(Subcommand, Debug)]
 pub enum BlueprintCommands {
@@ -20,8 +21,10 @@ pub enum BlueprintCommands {
     },
 }
 
-pub async fn handle_build(_watch: bool, _ctx: &AppContext) -> anyhow::Result<()> {
-    anyhow::bail!("command 'build' not yet implemented")
+pub async fn handle_build(_watch: bool, ctx: &AppContext) -> anyhow::Result<()> {
+    let output = utxray_core::build::run_build(&ctx.project).await?;
+    print_output(&output)?;
+    Ok(())
 }
 
 pub async fn handle_blueprint(_cmd: BlueprintCommands, _ctx: &AppContext) -> anyhow::Result<()> {

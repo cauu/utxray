@@ -1,0 +1,13 @@
+name = "test/hello_world"
+version = "0.0.1"
+compiler = "v1.1.0"
+plutus = "v3"
+license = "Apache-2.0"
+description = "A minimal Aiken project for testing"
+
+[repository]
+user = "test"
+project = "hello_world"
+platform = "github"
+
+[[dependencies]]
