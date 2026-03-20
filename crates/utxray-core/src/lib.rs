@@ -7,4 +7,5 @@ pub mod error;
 pub mod output;
 pub mod test_cmd;
 pub mod trace;
+pub mod tx;
 pub mod typecheck;

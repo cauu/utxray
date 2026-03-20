@@ -1,0 +1,37 @@
+{
+  "inputs": [{ "utxo": "abc123#0", "type": "pubkey" }],
+  "script_inputs": [
+    {
+      "utxo": "def456#1",
+      "validator": "escrow.spend",
+      "purpose": "spend",
+      "datum": { "owner": "aabb", "deadline": 1000, "amount": 5000000 },
+      "redeemer": { "constructor": 0, "fields": [] },
+      "datum_source": "inline"
+    }
+  ],
+  "reference_inputs": [],
+  "outputs": [
+    { "address": "addr_test1qz123", "value": { "lovelace": 5000000 }, "datum": null },
+    {
+      "address": "addr_test1wq456",
+      "value": {
+        "lovelace": 2000000,
+        "tokens": { "d4e5f6": { "MyToken": 1 } }
+      },
+      "datum": { "inline": { "constructor": 0, "fields": [] } }
+    }
+  ],
+  "mint": {
+    "d4e5f6": {
+      "assets": { "MyToken": 1 },
+      "redeemer": { "constructor": 0, "fields": [] },
+      "validator": "token.mint"
+    }
+  },
+  "collateral": "abc123#2",
+  "change_address": "addr_test1qz123",
+  "required_signers": ["aabb"],
+  "validity": { "from_slot": null, "to_slot": 2000 },
+  "metadata": null
+}
