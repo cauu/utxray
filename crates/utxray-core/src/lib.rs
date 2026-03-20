@@ -6,4 +6,5 @@ pub mod env;
 pub mod error;
 pub mod output;
 pub mod test_cmd;
+pub mod trace;
 pub mod typecheck;
