@@ -89,6 +89,53 @@ impl AikenCli {
             raw_stderr,
         })
     }
+
+    /// Run `aiken check` for test execution, with optional match pattern, module, and seed.
+    pub async fn test(
+        &self,
+        match_pattern: Option<&str>,
+        module: Option<&str>,
+        trace_level: &str,
+        seed: Option<u64>,
+    ) -> anyhow::Result<AikenOutput> {
+        let mut cmd = Command::new(&self.binary);
+        cmd.arg("check");
+        cmd.arg("--trace-level");
+        cmd.arg(trace_level);
+
+        if let Some(m) = match_pattern {
+            cmd.arg("--match");
+            cmd.arg(m);
+        }
+
+        if let Some(m) = module {
+            cmd.arg("-m");
+            cmd.arg(m);
+        }
+
+        if let Some(s) = seed {
+            cmd.arg("--seed");
+            cmd.arg(s.to_string());
+        }
+
+        cmd.current_dir(&self.project_dir);
+
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to execute aiken check: {e}"))?;
+
+        let exit_code = output.status.code().unwrap_or(-1);
+        let raw_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let raw_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        Ok(AikenOutput {
+            exit_code,
+            parsed: None,
+            raw_stdout,
+            raw_stderr,
+        })
+    }
 }
 
 #[cfg(test)]
