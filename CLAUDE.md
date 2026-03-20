@@ -30,7 +30,18 @@ Work on the current phase. Follow these sub-rules:
 - For each command: write integration test FIRST, then implement
 - Use fixtures in tests/fixtures/
 - After each command is done, update docs/coverage-matrix.md
-- Commit after each meaningful unit of work
+- After each functional unit (one command, one fix, one phase milestone), commit AND push:
+```bash
+  git add -A && git commit -m "<type>: <description>" && git push
+```
+  Commit message conventions:
+  - `feat: implement <command>` — new command working with tests
+  - `test: add fixtures for <command>` — test infrastructure
+  - `fix: <what was broken>` — fixing a failing verification
+  - `chore: phase N scaffold` — phase-level infrastructure
+  - `docs: update coverage-matrix / verification-report` — doc updates
+
+  Do NOT batch multiple commands into one commit. Each command = its own commit + push.
 
 ### Step 3: Verify
 Run the verification script:
@@ -50,6 +61,10 @@ Read the `all_pass` field in verification-result.json:
   cat docs/phase-state.json | jq --argjson p <next_phase> '.current_phase = $p | .attempt = 1 | .last_failure_summary = null | .phases_completed += [($p - 1)]' > /tmp/ps.json && mv /tmp/ps.json docs/phase-state.json
 ```
   Then update docs/verification-report.md with evidence.
+  Then commit and push:
+```bash
+  git add -A && git commit -m "chore: phase <N> complete, advancing to phase <N+1>" && git push
+```
   Then go back to Step 1.
 
 - If `false`: read which checks failed, fix them, increment attempt:
@@ -61,7 +76,10 @@ Read the `all_pass` field in verification-result.json:
 ### Step 5: Completion
 When phase-state.json shows `current_phase` > 1 (for v1 core scope):
 - Write final docs/verification-report.md
-- Commit everything
+- Commit and push:
+```bash
+  git add -A && git commit -m "chore: utxray v1 core complete" && git push
+```
 - Say: "utxray v1 core complete. All phase gates pass. See docs/verification-report.md."
 - STOP.
 
