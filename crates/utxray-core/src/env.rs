@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::backend::blockfrost::BlockfrostBackend;
 use crate::config::Config;
 
 #[derive(Debug, Serialize)]
@@ -7,6 +8,10 @@ pub struct EnvInfo {
     pub aiken: AikenInfo,
     pub config: ConfigInfo,
     pub backends: BackendsInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blockfrost: Option<BlockfrostInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_tip: Option<NetworkTipInfo>,
 }
 
 #[derive(Debug, Serialize)]
@@ -36,6 +41,18 @@ pub struct BackendStatus {
     pub configured: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct BlockfrostInfo {
+    pub available: bool,
+    pub network: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NetworkTipInfo {
+    pub slot: u64,
+    pub epoch: u64,
+}
+
 /// Check the environment: aiken installation, config status, backends.
 pub async fn check_env(
     config: &Config,
@@ -50,22 +67,56 @@ pub async fn check_env(
         network: config.network.default.clone(),
     };
 
+    let bf_configured = config.blockfrost.project_id.is_some();
+
     let backends = BackendsInfo {
         blockfrost: BackendStatus {
-            configured: config.blockfrost.project_id.is_some(),
+            configured: bf_configured,
         },
-        ogmios: BackendStatus {
-            // Ogmios is considered configured if it has non-default or any host/port set
-            // For now, we just check if the config section exists (it always does with defaults)
-            // A more nuanced check would verify connectivity, but that's not env's job
-            configured: false,
-        },
+        ogmios: BackendStatus { configured: false },
+    };
+
+    // If blockfrost is configured, try a health check and tip query
+    let (blockfrost_info, network_tip) = if let Some(ref project_id) = config.blockfrost.project_id
+    {
+        let network = &config.network.default;
+        match BlockfrostBackend::new(project_id, network) {
+            Ok(backend) => {
+                let healthy = backend.health().await.unwrap_or(false);
+                let tip = if healthy {
+                    backend.query_tip().await.ok().map(|t| NetworkTipInfo {
+                        slot: t.slot,
+                        epoch: t.epoch,
+                    })
+                } else {
+                    None
+                };
+                (
+                    Some(BlockfrostInfo {
+                        available: healthy,
+                        network: network.clone(),
+                    }),
+                    tip,
+                )
+            }
+            Err(_) => (
+                Some(BlockfrostInfo {
+                    available: false,
+                    network: network.clone(),
+                }),
+                None,
+            ),
+        }
+    } else {
+        (None, None)
     };
 
     Ok(EnvInfo {
         aiken,
         config: config_info,
         backends,
+        blockfrost: blockfrost_info,
+        network_tip,
     })
 }
 
