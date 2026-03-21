@@ -8,7 +8,7 @@ We define a goal-driven multi-agent system for implementing the `utxray` CLI pro
 
 Implement the `utxray` CLI tool — a Cardano / Aiken smart contract debugging toolchain for AI agents.
 
-The implementation target is defined by two source-of-truth documents:
+The implementation target is defined by two source-of-truth documents and one reference map:
 
 1. **Interface Spec**: `docs/spec.md`
    - Defines commands, input schemas, output JSON contracts, status conventions, backend capability matrix, workflow behavior, and protocol semantics.
@@ -16,6 +16,10 @@ The implementation target is defined by two source-of-truth documents:
 
 2. **Rust Scaffold / Technical Selection Doc**: `docs/scaffold.md`
    - Defines the Rust workspace structure, crate choices, Aiken integration strategy, backend strategy, implementation phases, and engineering conventions.
+
+3. **Authoritative Reference Sources**: `docs/references.md`
+   - Maps each implementation gap (CBOR encoding, fee calculation, script-data-hash, Blockfrost API, ScriptContext construction, slot/time conversion, diagnose rules) to its authoritative spec URL and best reference implementation.
+   - When implementing algorithms not covered by spec.md, the subagent MUST consult this file first.
 
 The implementation must follow these documents strictly.
 
@@ -341,8 +345,9 @@ You MUST follow these rules:
 Before writing any code, read end to end:
 - `docs/spec.md`
 - `docs/scaffold.md`
+- `docs/references.md`
 
-These are the single source of truth. Do not guess field names, status semantics, JSON structure, or command behavior from memory.
+These are the single source of truth. Do not guess field names, status semantics, JSON structure, command behavior, or implementation algorithms from memory. When implementing a command, check `docs/references.md` for the relevant spec URL and reference implementation before writing code.
 
 ### 2. Work phase by phase
 
