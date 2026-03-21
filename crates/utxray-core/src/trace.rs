@@ -26,6 +26,9 @@ pub struct TraceOutput {
     pub traces: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub constructed_context: Option<serde_json::Value>,
+    pub execution_performed: bool,
 }
 
 /// Configuration for the trace command.
@@ -101,11 +104,18 @@ fn validate_signatory(sig: &str) -> Result<(), TraceError> {
     Ok(())
 }
 
+/// Information about a validator found in the blueprint.
+struct BlueprintValidatorInfo {
+    title: String,
+    has_datum: Option<bool>,
+    hash: String,
+}
+
 /// Look up a validator in the blueprint by name. Supports both "module.name" and just "name".
 fn find_validator_in_blueprint(
     blueprint_content: &str,
     validator_name: &str,
-) -> Result<(String, Option<bool>), TraceError> {
+) -> Result<BlueprintValidatorInfo, TraceError> {
     let validators = parse_blueprint(blueprint_content)
         .map_err(|e| TraceError::BlueprintReadError(e.to_string()))?;
 
@@ -123,19 +133,237 @@ fn find_validator_in_blueprint(
         let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("");
         if title == validator_name || title.ends_with(&format!(".{validator_name}")) {
             let has_datum = v.get("datum").is_some();
-            return Ok((title.to_string(), Some(has_datum)));
+            let hash = v
+                .get("hash")
+                .and_then(|h| h.as_str())
+                .unwrap_or("")
+                .to_string();
+            return Ok(BlueprintValidatorInfo {
+                title: title.to_string(),
+                has_datum: Some(has_datum),
+                hash,
+            });
         }
     }
 
     // Try matching against parsed validators by name
     for v in &validators {
         if v.name == validator_name {
-            // We found it by parsed name, reconstruct the title
-            return Ok((validator_name.to_string(), None));
+            return Ok(BlueprintValidatorInfo {
+                title: validator_name.to_string(),
+                has_datum: None,
+                hash: v.hash.clone(),
+            });
         }
     }
 
     Err(TraceError::ValidatorNotFound(validator_name.to_string()))
+}
+
+/// Build a minimal ScriptContext JSON for Mode A (no user-supplied context).
+///
+/// Constructs a well-formed Aiken-compatible ScriptContext from the provided
+/// inputs, following the auto-fill algorithm from the spec.
+fn build_minimal_script_context(
+    purpose: &str,
+    validator_hash: &str,
+    datum: Option<&serde_json::Value>,
+    redeemer: &serde_json::Value,
+    slot: Option<u64>,
+    signatories: &[String],
+) -> serde_json::Value {
+    // Zero tx hash for the fake script input
+    let zero_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+    // Distinct hash for the fee-providing pubkey input
+    let fee_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+    // Build the script input based on purpose
+    let script_credential = serde_json::json!({
+        "Script": validator_hash
+    });
+
+    let script_address = serde_json::json!({
+        "payment_credential": script_credential,
+        "stake_credential": null
+    });
+
+    // The script UTxO input (for spend) or a reference input
+    let script_input_value = serde_json::json!({
+        "lovelace": 5_000_000u64,
+        "assets": {}
+    });
+
+    let mut script_input = serde_json::json!({
+        "output_reference": {
+            "transaction_id": zero_hash,
+            "output_index": 0
+        },
+        "output": {
+            "address": script_address,
+            "value": script_input_value,
+            "datum": null,
+            "reference_script": null
+        }
+    });
+
+    // For spend, attach inline datum to the script input
+    if purpose == "spend" {
+        if let Some(d) = datum {
+            script_input["output"]["datum"] = serde_json::json!({
+                "InlineDatum": d
+            });
+        }
+    }
+
+    // Fee-providing pubkey input (1 billion lovelace)
+    let pubkey_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let pubkey_address = serde_json::json!({
+        "payment_credential": { "VerificationKey": &pubkey_hash[..56] },
+        "stake_credential": null
+    });
+
+    let fee_input = serde_json::json!({
+        "output_reference": {
+            "transaction_id": fee_hash,
+            "output_index": 0
+        },
+        "output": {
+            "address": pubkey_address,
+            "value": {
+                "lovelace": 1_000_000_000u64,
+                "assets": {}
+            },
+            "datum": null,
+            "reference_script": null
+        }
+    });
+
+    // Build inputs list: for spend, include the script input
+    let inputs = if purpose == "spend" {
+        serde_json::json!([script_input, fee_input])
+    } else {
+        serde_json::json!([fee_input])
+    };
+
+    // Build mint field: for mint purpose, include the validator's policy
+    let mint = if purpose == "mint" {
+        serde_json::json!({
+            validator_hash: {
+                "": 1
+            }
+        })
+    } else {
+        serde_json::json!({})
+    };
+
+    // Build withdrawals: for withdraw purpose
+    let withdrawals = if purpose == "withdraw" {
+        serde_json::json!({
+            validator_hash: 0
+        })
+    } else {
+        serde_json::json!({})
+    };
+
+    // Validity range
+    let validity_from = slot.map(|s| serde_json::json!(s));
+    let validity_to: Option<serde_json::Value> = None;
+    let validity_range = serde_json::json!({
+        "from": validity_from,
+        "to": validity_to
+    });
+
+    // Redeemers map: construct based on purpose
+    let redeemer_key = match purpose {
+        "spend" => serde_json::json!({
+            "Spend": {
+                "transaction_id": zero_hash,
+                "output_index": 0
+            }
+        }),
+        "mint" => serde_json::json!({
+            "Mint": validator_hash
+        }),
+        "withdraw" => serde_json::json!({
+            "Withdraw": validator_hash
+        }),
+        "publish" => serde_json::json!({
+            "Publish": 0
+        }),
+        _ => serde_json::json!(null),
+    };
+
+    let redeemers = serde_json::json!({
+        "entries": [{
+            "key": redeemer_key,
+            "value": redeemer
+        }]
+    });
+
+    // Datums map
+    let datums = if let Some(d) = datum {
+        serde_json::json!({
+            "entries": [{
+                "key": "inline",
+                "value": d
+            }]
+        })
+    } else {
+        serde_json::json!({ "entries": [] })
+    };
+
+    // Transaction ID (hash of zeros for minimal context)
+    let tx_id = zero_hash;
+
+    // Build the full transaction
+    let transaction = serde_json::json!({
+        "inputs": inputs,
+        "reference_inputs": [],
+        "outputs": [],
+        "fee": 200_000u64,
+        "mint": mint,
+        "certificates": [],
+        "withdrawals": withdrawals,
+        "validity_range": validity_range,
+        "signatories": signatories,
+        "redeemers": redeemers,
+        "datums": datums,
+        "id": tx_id
+    });
+
+    // Build purpose-specific info
+    let purpose_info = match purpose {
+        "spend" => serde_json::json!({
+            "Spend": {
+                "output_reference": {
+                    "transaction_id": zero_hash,
+                    "output_index": 0
+                },
+                "datum": datum
+            }
+        }),
+        "mint" => serde_json::json!({
+            "Mint": validator_hash
+        }),
+        "withdraw" => serde_json::json!({
+            "Withdraw": {
+                "Script": validator_hash
+            }
+        }),
+        "publish" => serde_json::json!({
+            "Publish": {
+                "index": 0,
+                "certificate": null
+            }
+        }),
+        _ => serde_json::json!(null),
+    };
+
+    serde_json::json!({
+        "transaction": transaction,
+        "purpose": purpose_info,
+        "redeemer": redeemer
+    })
 }
 
 /// Run the trace command.
@@ -221,17 +449,20 @@ pub async fn run_trace(
     let blueprint_content = std::fs::read_to_string(&blueprint_path)
         .map_err(|e| anyhow::anyhow!("failed to read blueprint: {e}"))?;
 
-    let (validator_title, has_datum_schema) =
-        match find_validator_in_blueprint(&blueprint_content, &config.validator) {
-            Ok(v) => v,
-            Err(e) => {
-                let output = Output::error(serde_json::json!({
-                    "error_code": "VALIDATOR_NOT_FOUND",
-                    "message": e.to_string()
-                }));
-                return Ok(output);
-            }
-        };
+    let bp_info = match find_validator_in_blueprint(&blueprint_content, &config.validator) {
+        Ok(v) => v,
+        Err(e) => {
+            let output = Output::error(serde_json::json!({
+                "error_code": "VALIDATOR_NOT_FOUND",
+                "message": e.to_string()
+            }));
+            return Ok(output);
+        }
+    };
+
+    let validator_title = bp_info.title;
+    let has_datum_schema = bp_info.has_datum;
+    let validator_hash = bp_info.hash;
 
     // For spend purpose, datum is required if the blueprint declares a datum schema
     if config.purpose == "spend" && config.datum.is_none() {
@@ -268,21 +499,62 @@ pub async fn run_trace(
         )
     };
 
+    // Parse redeemer and datum JSON for context construction
+    let redeemer_value = validate_json(&config.redeemer)
+        .map_err(|e| anyhow::anyhow!("redeemer parse failed unexpectedly: {e}"))?;
+    let datum_value = match &config.datum {
+        Some(d) => Some(
+            validate_json(d)
+                .map_err(|e| anyhow::anyhow!("datum parse failed unexpectedly: {e}"))?,
+        ),
+        None => None,
+    };
+
+    // Build the minimal ScriptContext for Mode A (no user-supplied context)
+    let constructed_context = if !has_context {
+        Some(build_minimal_script_context(
+            &config.purpose,
+            &validator_hash,
+            datum_value.as_ref(),
+            &redeemer_value,
+            config.slot,
+            &config.signatories,
+        ))
+    } else {
+        None
+    };
+
     // Attempt to run via aiken
     let cli = match AikenCli::new(project_dir) {
         Ok(c) => c,
         Err(_) => {
-            // Aiken not available — return structured error
-            let output = Output::error(serde_json::json!({
-                "error_code": "AIKEN_NOT_FOUND",
-                "scope": "script_only",
-                "validator": validator_title,
-                "purpose": config.purpose,
-                "context_mode": context_mode,
-                "auto_filled_fields": auto_filled_fields,
-                "cost_fidelity": cost_fidelity,
-                "message": "trace execution requires aiken. Install it from https://aiken-lang.org"
-            }));
+            // Aiken not available — return ok with constructed context but no execution
+            let trace_output = TraceOutput {
+                scope: "script_only".to_string(),
+                validator: validator_title,
+                purpose: config.purpose,
+                context_mode: context_mode.to_string(),
+                auto_filled_fields,
+                cost_fidelity: cost_fidelity.to_string(),
+                result: "pending".to_string(),
+                exec_units: ExecUnits { cpu: 0, mem: 0 },
+                budget_source,
+                traces: vec!["aiken not available; execution not performed".to_string()],
+                error_detail: Some(
+                    "trace execution requires aiken. Install it from https://aiken-lang.org"
+                        .to_string(),
+                ),
+                constructed_context,
+                execution_performed: false,
+            };
+
+            let data = serde_json::to_value(&trace_output)
+                .map_err(|e| anyhow::anyhow!("failed to serialize trace output: {e}"))?;
+
+            let output = Output::ok(data).with_warning(
+                crate::error::Severity::Warning,
+                "aiken not available; context constructed but execution was not performed",
+            );
             return Ok(output);
         }
     };
@@ -343,6 +615,8 @@ pub async fn run_trace(
         budget_source,
         traces,
         error_detail,
+        constructed_context,
+        execution_performed: true,
     };
 
     let data = serde_json::to_value(&trace_output)
@@ -435,9 +709,10 @@ mod tests {
                 "hash": "abc123"
             }]
         }"#;
-        let (title, has_datum) = find_validator_in_blueprint(blueprint, "escrow.escrow.spend")?;
-        assert_eq!(title, "escrow.escrow.spend");
-        assert_eq!(has_datum, Some(true));
+        let info = find_validator_in_blueprint(blueprint, "escrow.escrow.spend")?;
+        assert_eq!(info.title, "escrow.escrow.spend");
+        assert_eq!(info.has_datum, Some(true));
+        assert_eq!(info.hash, "abc123");
         Ok(())
     }
 
@@ -453,8 +728,8 @@ mod tests {
                 "hash": "abc123"
             }]
         }"#;
-        let (title, _) = find_validator_in_blueprint(blueprint, "escrow.spend")?;
-        assert_eq!(title, "escrow.escrow.spend");
+        let info = find_validator_in_blueprint(blueprint, "escrow.spend")?;
+        assert_eq!(info.title, "escrow.escrow.spend");
         Ok(())
     }
 
@@ -483,9 +758,10 @@ mod tests {
                 "hash": "abc123"
             }]
         }"#;
-        let (title, has_datum) = find_validator_in_blueprint(blueprint, "token.mint")?;
-        assert_eq!(title, "escrow.token.mint");
-        assert_eq!(has_datum, Some(false));
+        let info = find_validator_in_blueprint(blueprint, "token.mint")?;
+        assert_eq!(info.title, "escrow.token.mint");
+        assert_eq!(info.has_datum, Some(false));
+        assert_eq!(info.hash, "abc123");
         Ok(())
     }
 
@@ -685,15 +961,216 @@ mod tests {
         let output = run_trace(&fixture_dir, config).await?;
         let json = serde_json::to_value(&output)?;
         // Should not error on missing datum for mint
-        // It may error because aiken isn't installed, but NOT for missing datum
         let status = json["status"].as_str().unwrap_or("");
-        if status == "error" {
-            // Should be aiken-related, not datum-related
+        // When aiken is not installed, we now get "ok" with a warning and constructed_context
+        if status == "ok" {
+            // Check that context was constructed and no datum error
+            assert!(
+                json.get("error_detail").is_none()
+                    || !json["error_detail"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("datum is required"),
+                "mint should not require datum"
+            );
+        } else if status == "error" {
             let msg = json["message"].as_str().unwrap_or("");
             assert!(
                 !msg.contains("datum is required"),
                 "mint should not require datum"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_minimal_context_spend() -> TestResult {
+        let datum = serde_json::json!({"constructor": 0, "fields": [{"bytes": "aabb"}, {"int": 100}, {"int": 50}]});
+        let redeemer = serde_json::json!({"constructor": 0, "fields": []});
+        let hash = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
+        let signatories =
+            vec!["aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd".to_string()];
+
+        let ctx = build_minimal_script_context(
+            "spend",
+            hash,
+            Some(&datum),
+            &redeemer,
+            Some(1000),
+            &signatories,
+        );
+
+        // Verify top-level structure
+        assert!(ctx.get("transaction").is_some());
+        assert!(ctx.get("purpose").is_some());
+        assert!(ctx.get("redeemer").is_some());
+
+        let tx = &ctx["transaction"];
+        // Verify transaction fields
+        assert_eq!(tx["fee"], 200_000);
+        assert!(tx["inputs"].as_array().is_some());
+        assert_eq!(tx["inputs"].as_array().ok_or("expected array")?.len(), 2); // script + fee input
+        assert!(tx["reference_inputs"]
+            .as_array()
+            .ok_or("expected array")?
+            .is_empty());
+        assert!(tx["outputs"].as_array().ok_or("expected array")?.is_empty());
+        assert!(tx["certificates"]
+            .as_array()
+            .ok_or("expected array")?
+            .is_empty());
+        assert_eq!(
+            tx["signatories"].as_array().ok_or("expected array")?.len(),
+            1
+        );
+
+        // Verify validity range has the slot
+        assert_eq!(tx["validity_range"]["from"], 1000);
+        assert!(tx["validity_range"]["to"].is_null());
+
+        // Verify the script input has inline datum
+        let script_input = &tx["inputs"][0];
+        assert!(script_input["output"]["datum"]["InlineDatum"].is_object());
+
+        // Verify purpose is Spend
+        assert!(ctx["purpose"].get("Spend").is_some());
+
+        // Verify redeemers entry
+        let redeemer_entries = tx["redeemers"]["entries"]
+            .as_array()
+            .ok_or("expected array")?;
+        assert_eq!(redeemer_entries.len(), 1);
+        assert!(redeemer_entries[0]["key"].get("Spend").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_minimal_context_mint() -> TestResult {
+        let redeemer = serde_json::json!({"constructor": 0, "fields": []});
+        let hash = "11223344112233441122334411223344112233441122334411223344";
+
+        let ctx = build_minimal_script_context("mint", hash, None, &redeemer, None, &[]);
+
+        let tx = &ctx["transaction"];
+        // Mint should only have the fee input (no script input)
+        assert_eq!(tx["inputs"].as_array().ok_or("expected array")?.len(), 1);
+
+        // Mint field should contain the policy
+        assert!(tx["mint"].get(hash).is_some());
+
+        // Purpose should be Mint
+        assert!(ctx["purpose"].get("Mint").is_some());
+        assert_eq!(ctx["purpose"]["Mint"], hash);
+
+        // Validity range should have null from (no slot provided)
+        assert!(tx["validity_range"]["from"].is_null());
+
+        // Redeemer key should be Mint
+        let redeemer_entries = tx["redeemers"]["entries"]
+            .as_array()
+            .ok_or("expected array")?;
+        assert!(redeemer_entries[0]["key"].get("Mint").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_minimal_context_withdraw() -> TestResult {
+        let redeemer = serde_json::json!({"constructor": 1, "fields": []});
+        let hash = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
+
+        let ctx = build_minimal_script_context("withdraw", hash, None, &redeemer, None, &[]);
+
+        let tx = &ctx["transaction"];
+        // Withdrawals should contain the credential
+        assert!(tx["withdrawals"].get(hash).is_some());
+
+        // Purpose should be Withdraw
+        assert!(ctx["purpose"].get("Withdraw").is_some());
+
+        // Redeemer key should be Withdraw
+        let redeemer_entries = tx["redeemers"]["entries"]
+            .as_array()
+            .ok_or("expected array")?;
+        assert!(redeemer_entries[0]["key"].get("Withdraw").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_minimal_context_no_datum_for_non_spend() -> TestResult {
+        let redeemer = serde_json::json!({"constructor": 0, "fields": []});
+        let hash = "11223344112233441122334411223344112233441122334411223344";
+
+        let ctx = build_minimal_script_context("mint", hash, None, &redeemer, None, &[]);
+
+        // Datums entries should be empty
+        let datums = &ctx["transaction"]["datums"]["entries"];
+        assert!(datums.as_array().ok_or("expected array")?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_minimal_context_with_signatories() -> TestResult {
+        let redeemer = serde_json::json!({"constructor": 0, "fields": []});
+        let hash = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
+        let sigs = vec![
+            "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd".to_string(),
+            "11223344112233441122334411223344112233441122334411223344".to_string(),
+        ];
+
+        let ctx = build_minimal_script_context("spend", hash, None, &redeemer, None, &sigs);
+
+        assert_eq!(
+            ctx["transaction"]["signatories"]
+                .as_array()
+                .ok_or("expected array")?
+                .len(),
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_run_trace_constructs_context_mode_a() -> TestResult {
+        let fixture_dir =
+            env!("CARGO_MANIFEST_DIR").replace("crates/utxray-core", "tests/fixtures/escrow");
+        let config = TraceConfig {
+            validator: "escrow.spend".to_string(),
+            purpose: "spend".to_string(),
+            redeemer: r#"{"constructor": 0, "fields": []}"#.to_string(),
+            datum: Some(
+                r#"{"constructor": 0, "fields": [{"bytes": "aabb"}, {"int": 100}, {"int": 50}]}"#
+                    .to_string(),
+            ),
+            context: None,
+            slot: Some(500),
+            signatories: vec![],
+        };
+        let output = run_trace(&fixture_dir, config).await?;
+        let json = serde_json::to_value(&output)?;
+
+        let status = json["status"].as_str().unwrap_or("");
+        assert!(
+            status == "ok" || status == "error",
+            "status should be ok or error, got {status}"
+        );
+
+        // In Mode A (no user-supplied context), constructed_context should be present
+        // regardless of whether aiken is available
+        if status == "ok" {
+            // constructed_context should be present
+            assert!(
+                json.get("constructed_context").is_some() && !json["constructed_context"].is_null(),
+                "constructed_context should be present in Mode A"
+            );
+
+            // Verify the context has proper structure
+            let ctx = &json["constructed_context"];
+            assert!(ctx.get("transaction").is_some());
+            assert!(ctx.get("purpose").is_some());
+            assert!(ctx.get("redeemer").is_some());
+
+            // Verify validity range has the slot we passed
+            assert_eq!(ctx["transaction"]["validity_range"]["from"], 500);
         }
         Ok(())
     }
