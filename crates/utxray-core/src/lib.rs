@@ -1,4 +1,5 @@
 pub mod aiken;
+pub mod backend;
 pub mod build;
 pub mod cbor;
 pub mod config;

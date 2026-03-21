@@ -1,0 +1,27 @@
+[
+  {
+    "tx_hash": "aaaa000000000000000000000000000000000000000000000000000000000000",
+    "tx_index": 0,
+    "output_index": 0,
+    "amount": [
+      { "unit": "lovelace", "quantity": "5000000" },
+      { "unit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbcccc", "quantity": "100" }
+    ],
+    "block": "bbbb000000000000000000000000000000000000000000000000000000000000",
+    "data_hash": "dddd000000000000000000000000000000000000000000000000000000000000",
+    "inline_datum": null,
+    "reference_script_hash": null
+  },
+  {
+    "tx_hash": "eeee000000000000000000000000000000000000000000000000000000000000",
+    "tx_index": 0,
+    "output_index": 1,
+    "amount": [
+      { "unit": "lovelace", "quantity": "10000000" }
+    ],
+    "block": "ffff000000000000000000000000000000000000000000000000000000000000",
+    "data_hash": null,
+    "inline_datum": { "constructor": 0, "fields": [{ "int": 42 }] },
+    "reference_script_hash": "1111000000000000000000000000000000000000000000000000000000000000"
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "json_value": {
+    "constructor": 0,
+    "fields": [
+      { "bytes": "aabbccdd" },
+      { "int": 1000000 }
+    ]
+  }
+}

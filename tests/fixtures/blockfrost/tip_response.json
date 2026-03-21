@@ -1,0 +1,19 @@
+{
+  "time": 1700000000,
+  "height": 987654,
+  "hash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+  "slot": 12345678,
+  "epoch": 100,
+  "epoch_slot": 5678,
+  "slot_leader": "pool1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "size": 12345,
+  "tx_count": 5,
+  "output": "100000000",
+  "fees": "500000",
+  "block_vrf": "vrf_vk1xxxxxxxxx",
+  "op_cert": "xxxxxxxx",
+  "op_cert_counter": "1",
+  "previous_block": "0000000000000000000000000000000000000000000000000000000000000000",
+  "next_block": null,
+  "confirmations": 10
+}
