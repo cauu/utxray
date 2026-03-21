@@ -159,7 +159,9 @@ mod tests {
         let roundtrip_json = plutus_data_to_json(&decoded);
 
         assert_eq!(roundtrip_json["constructor"], 0);
-        let fields = roundtrip_json["fields"].as_array().ok_or("expected fields array")?;
+        let fields = roundtrip_json["fields"]
+            .as_array()
+            .ok_or("expected fields array")?;
         assert_eq!(fields[0]["int"], 42);
         assert_eq!(fields[1]["bytes"], "aabb");
         Ok(())
@@ -198,7 +200,9 @@ mod tests {
         let decoded: PlutusData = pallas_codec::minicbor::decode(&cbor_bytes)
             .map_err(|e| format!("decode failed: {e}"))?;
         let roundtrip_json = plutus_data_to_json(&decoded);
-        let list = roundtrip_json["list"].as_array().ok_or("expected list array")?;
+        let list = roundtrip_json["list"]
+            .as_array()
+            .ok_or("expected list array")?;
         assert_eq!(list.len(), 3);
         assert_eq!(list[0]["int"], 1);
         Ok(())
@@ -213,7 +217,9 @@ mod tests {
         let decoded: PlutusData = pallas_codec::minicbor::decode(&cbor_bytes)
             .map_err(|e| format!("decode failed: {e}"))?;
         let roundtrip_json = plutus_data_to_json(&decoded);
-        let map_entries = roundtrip_json["map"].as_array().ok_or("expected map array")?;
+        let map_entries = roundtrip_json["map"]
+            .as_array()
+            .ok_or("expected map array")?;
         assert_eq!(map_entries.len(), 1);
         assert_eq!(map_entries[0]["k"]["bytes"], "aa");
         assert_eq!(map_entries[0]["v"]["int"], 10);
@@ -231,7 +237,9 @@ mod tests {
             .map_err(|e| format!("decode failed: {e}"))?;
         let roundtrip_json = plutus_data_to_json(&decoded);
         assert_eq!(roundtrip_json["constructor"], 1);
-        let fields = roundtrip_json["fields"].as_array().ok_or("expected fields array")?;
+        let fields = roundtrip_json["fields"]
+            .as_array()
+            .ok_or("expected fields array")?;
         assert_eq!(fields[0]["constructor"], 0);
         assert_eq!(fields[0]["fields"][0]["int"], 42);
         assert_eq!(fields[1]["int"], 99);

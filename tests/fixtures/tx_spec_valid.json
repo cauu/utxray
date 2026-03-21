@@ -1,37 +1,37 @@
 {
-  "inputs": [{ "utxo": "abc123#0", "type": "pubkey" }],
+  "inputs": [{ "utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey" }],
   "script_inputs": [
     {
-      "utxo": "def456#1",
+      "utxo": "1122334411223344112233441122334411223344112233441122334411223344#1",
       "validator": "escrow.spend",
       "purpose": "spend",
-      "datum": { "owner": "aabb", "deadline": 1000, "amount": 5000000 },
+      "datum": { "constructor": 0, "fields": [{"int": 42}] },
       "redeemer": { "constructor": 0, "fields": [] },
       "datum_source": "inline"
     }
   ],
   "reference_inputs": [],
   "outputs": [
-    { "address": "addr_test1qz123", "value": { "lovelace": 5000000 }, "datum": null },
+    { "address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": { "lovelace": 5000000 }, "datum": null },
     {
-      "address": "addr_test1wq456",
+      "address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp",
       "value": {
         "lovelace": 2000000,
-        "tokens": { "d4e5f6": { "MyToken": 1 } }
+        "tokens": { "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd": { "MyToken": 1 } }
       },
       "datum": { "inline": { "constructor": 0, "fields": [] } }
     }
   ],
   "mint": {
-    "d4e5f6": {
+    "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd": {
       "assets": { "MyToken": 1 },
       "redeemer": { "constructor": 0, "fields": [] },
       "validator": "token.mint"
     }
   },
-  "collateral": "abc123#2",
-  "change_address": "addr_test1qz123",
-  "required_signers": ["aabb"],
+  "collateral": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#2",
+  "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp",
+  "required_signers": ["aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"],
   "validity": { "from_slot": null, "to_slot": 2000 },
   "metadata": null
 }

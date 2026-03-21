@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+pallas-addresses.workspace = true
 pallas-codec.workspace = true
 pallas-crypto.workspace = true
 pallas-primitives.workspace = true

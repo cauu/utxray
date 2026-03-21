@@ -213,7 +213,9 @@ pub fn total_output_lovelace(spec: &TxSpec) -> u64 {
     spec.outputs.iter().map(|o| o.value.lovelace).sum()
 }
 
-/// Estimate fee (simplified for Phase 1 -- fixed estimate based on tx complexity).
+/// Estimate fee (simplified heuristic based on tx complexity).
+/// This is only used as a fallback; the real fee is calculated from CBOR tx size
+/// by the cbor_builder module.
 pub fn estimate_fee(spec: &TxSpec) -> u64 {
     let base_fee: u64 = 170_000;
     let per_input: u64 = 5_000;
@@ -230,6 +232,9 @@ pub fn estimate_fee(spec: &TxSpec) -> u64 {
 
 /// Build the transaction summary and write the tx file.
 /// Returns Output with TxBuildOutput on success.
+///
+/// Produces real Cardano Conway-era CBOR transactions. The tx file contains
+/// hex-encoded CBOR that can be decoded by pallas or cardano-cli.
 pub fn build_tx(
     spec: &TxSpec,
     tx_file_path: &str,
@@ -237,11 +242,14 @@ pub fn build_tx(
 ) -> Result<Output<serde_json::Value>, TxBuildError> {
     let scripts_invoked = extract_scripts_invoked(spec);
     let total_out = total_output_lovelace(spec);
-    let fee = estimate_fee(spec);
     let inputs_count = spec.inputs.len() + spec.script_inputs.len();
     let outputs_count = spec.outputs.len();
 
-    // For Phase 1, total_input_lovelace = total_output_lovelace + fee
+    // Build real CBOR transaction
+    let (cbor_bytes, fee) = crate::tx::cbor_builder::build_cbor_tx(spec)?;
+    let cbor_hex = hex::encode(&cbor_bytes);
+
+    // total_input_lovelace = total_output_lovelace + fee
     // (since we don't have real UTxO data to look up actual input values)
     let total_input_lovelace = total_out + fee;
 
@@ -254,30 +262,11 @@ pub fn build_tx(
         estimated_fee: fee,
     };
 
-    // Write the tx file (a JSON representation for Phase 1)
-    let tx_content = serde_json::json!({
-        "type": "utxray-unsigned-tx",
-        "description": "Transaction built by utxray (Phase 1 - local only)",
-        "spec": spec,
-        "summary": {
-            "inputs_count": summary.inputs_count,
-            "outputs_count": summary.outputs_count,
-            "estimated_fee": summary.estimated_fee,
-        }
-    });
-
-    let tx_json = serde_json::to_string_pretty(&tx_content)
-        .map_err(|e| TxBuildError::WriteError(format!("failed to serialize tx: {e}")))?;
-
-    std::fs::write(tx_file_path, &tx_json)
+    // Write the tx file as hex-encoded CBOR
+    std::fs::write(tx_file_path, &cbor_hex)
         .map_err(|e| TxBuildError::WriteError(format!("failed to write {tx_file_path}: {e}")))?;
 
-    let tx_cbor = if include_raw {
-        // For Phase 1, provide hex-encoded JSON as placeholder
-        Some(hex::encode(&tx_json))
-    } else {
-        None
-    };
+    let tx_cbor = if include_raw { Some(cbor_hex) } else { None };
 
     let mut data = serde_json::json!({
         "tx_file": tx_file_path,
@@ -340,26 +329,26 @@ mod tests {
 
     fn sample_spec_json() -> &'static str {
         r#"{
-            "inputs": [{"utxo": "abc123#0", "type": "pubkey"}],
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
             "script_inputs": [
                 {
-                    "utxo": "def456#1",
+                    "utxo": "1122334411223344112233441122334411223344112233441122334411223344#1",
                     "validator": "escrow.spend",
                     "purpose": "spend",
-                    "datum": {"owner": "aabb", "deadline": 1000, "amount": 5000000},
+                    "datum": {"constructor": 0, "fields": [{"int": 42}]},
                     "redeemer": {"constructor": 0, "fields": []},
                     "datum_source": "inline"
                 }
             ],
             "reference_inputs": [],
             "outputs": [
-                {"address": "addr_test1qz123", "value": {"lovelace": 5000000}},
-                {"address": "addr_test1wq456", "value": {"lovelace": 2000000}}
+                {"address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": {"lovelace": 5000000}},
+                {"address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": {"lovelace": 2000000}}
             ],
             "mint": null,
-            "collateral": "abc123#2",
-            "change_address": "addr_test1qz123",
-            "required_signers": ["aabb"],
+            "collateral": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#2",
+            "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp",
+            "required_signers": ["aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"],
             "validity": {"from_slot": null, "to_slot": 2000},
             "metadata": null
         }"#
@@ -371,7 +360,7 @@ mod tests {
         assert_eq!(spec.inputs.len(), 1);
         assert_eq!(spec.script_inputs.len(), 1);
         assert_eq!(spec.outputs.len(), 2);
-        assert_eq!(spec.change_address, "addr_test1qz123");
+        assert!(spec.change_address.starts_with("addr_test1"));
         Ok(())
     }
 
@@ -486,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_tx_writes_file() -> TestResult {
+    fn test_build_tx_writes_cbor_file() -> TestResult {
         let spec = parse_tx_spec(sample_spec_json())?;
         let dir = std::env::temp_dir().join("utxray_test_tx_build");
         std::fs::create_dir_all(&dir)?;
@@ -501,6 +490,14 @@ mod tests {
         assert!(json["summary"]["inputs_count"].is_number());
         assert!(json.get("tx_cbor").is_none());
         assert!(tx_path.exists());
+
+        // Verify the file contains valid hex-encoded CBOR
+        let file_content = std::fs::read_to_string(&tx_path)?;
+        let cbor_bytes = hex::decode(&file_content)?;
+        // Should decode as a Conway Tx
+        let _decoded: pallas_primitives::conway::Tx =
+            pallas_codec::minicbor::decode(&cbor_bytes)
+                .map_err(|e| format!("failed to decode CBOR tx: {e}"))?;
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&dir);
@@ -520,6 +517,13 @@ mod tests {
 
         assert_eq!(json["status"], "ok");
         assert!(json["tx_cbor"].is_string());
+
+        // Verify the tx_cbor is valid hex-encoded CBOR
+        let cbor_hex = json["tx_cbor"].as_str().ok_or("expected tx_cbor string")?;
+        let cbor_bytes = hex::decode(cbor_hex)?;
+        let _decoded: pallas_primitives::conway::Tx =
+            pallas_codec::minicbor::decode(&cbor_bytes)
+                .map_err(|e| format!("failed to decode CBOR tx: {e}"))?;
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())

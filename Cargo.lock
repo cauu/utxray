@@ -1914,6 +1914,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "hex",
+ "pallas-addresses",
  "pallas-codec",
  "pallas-crypto",
  "pallas-primitives",
