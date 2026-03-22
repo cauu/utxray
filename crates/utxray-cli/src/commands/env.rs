@@ -13,10 +13,15 @@ pub async fn handle(ctx: &AppContext) -> anyhow::Result<()> {
 }
 
 pub async fn handle_gen_context(ctx: &AppContext) -> anyhow::Result<()> {
-    let output = Output::error(serde_json::json!({
-        "error_code": "NOT_IMPLEMENTED",
-        "message": "command 'gen-context' is not yet implemented"
-    }));
-    print_output_formatted(&output, &ctx.format)?;
+    match utxray_core::gen_context::gen_context(&ctx.project, None) {
+        Ok(output) => print_output_formatted(&output, &ctx.format)?,
+        Err(e) => {
+            let output = Output::error(serde_json::json!({
+                "error_code": "GEN_CONTEXT_ERROR",
+                "message": e.to_string(),
+            }));
+            print_output_formatted(&output, &ctx.format)?;
+        }
+    }
     Ok(())
 }

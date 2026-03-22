@@ -1,5 +1,7 @@
 pub mod aiken;
+pub mod auto;
 pub mod backend;
+pub mod blueprint;
 pub mod budget;
 pub mod build;
 pub mod cbor;
@@ -8,6 +10,7 @@ pub mod config;
 pub mod diagnose;
 pub mod env;
 pub mod error;
+pub mod gen_context;
 pub mod output;
 pub mod replay;
 pub mod test_cmd;
