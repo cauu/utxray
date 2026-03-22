@@ -1,0 +1,364 @@
+use std::path::Path;
+
+use serde::Serialize;
+
+use crate::blueprint::{BlueprintError, FullBlueprint, FullValidator};
+use crate::output::Output;
+
+// ── Error types ────────────────────────────────────────────────
+
+#[derive(Debug, thiserror::Error)]
+pub enum ScaffoldError {
+    #[error("blueprint not found: {0}")]
+    BlueprintNotFound(String),
+
+    #[error("validator not found: {0}")]
+    ValidatorNotFound(String),
+
+    #[error("blueprint parse error: {0}")]
+    BlueprintParse(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+impl From<BlueprintError> for ScaffoldError {
+    fn from(e: BlueprintError) -> Self {
+        match e {
+            BlueprintError::BlueprintNotFound(s) => ScaffoldError::BlueprintNotFound(s),
+            BlueprintError::ValidatorNotFound(s) => ScaffoldError::ValidatorNotFound(s),
+            BlueprintError::BlueprintParse(s) => ScaffoldError::BlueprintParse(s),
+            _ => ScaffoldError::BlueprintParse(e.to_string()),
+        }
+    }
+}
+
+// ── Output types ───────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct ScaffoldTestOutput {
+    pub validator: String,
+    pub generated_file: String,
+    pub tests_generated: usize,
+    pub content: String,
+}
+
+// ── Public API ─────────────────────────────────────────────────
+
+/// Generate a minimal test stub for a validator.
+///
+/// Reads plutus.json to get validator info, then generates an Aiken test file
+/// with passing and failing test stubs.
+pub fn scaffold_test(
+    project_dir: &str,
+    validator_name: &str,
+    blueprint_file: Option<&str>,
+    write_file: bool,
+) -> Result<Output<serde_json::Value>, ScaffoldError> {
+    // 1. Load blueprint
+    let bp = load_blueprint(project_dir, blueprint_file)?;
+
+    // 2. Find validator
+    let validator = find_validator(&bp, validator_name)?;
+
+    // 3. Generate test content
+    let (module_name, purpose) = parse_validator_title(&validator.title);
+    let test_content = generate_test_content(&module_name, &purpose, validator);
+    let test_count = count_tests(&test_content);
+
+    // 4. Determine output file path
+    let safe_name = module_name.replace('.', "_");
+    let file_name = format!("test_{}.ak", safe_name);
+    let file_path = Path::new(project_dir).join("validators").join(&file_name);
+    let file_path_str = file_path.display().to_string();
+
+    // 5. Optionally write the file
+    if write_file {
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&file_path, &test_content)?;
+    }
+
+    let data = serde_json::json!({
+        "validator": validator.title,
+        "generated_file": file_path_str,
+        "tests_generated": test_count,
+        "content": test_content,
+    });
+
+    Ok(Output::ok(data))
+}
+
+// ── Internal helpers ───────────────────────────────────────────
+
+fn load_blueprint(project_dir: &str, file: Option<&str>) -> Result<FullBlueprint, ScaffoldError> {
+    let path = match file {
+        Some(f) => std::path::PathBuf::from(f),
+        None => Path::new(project_dir).join("plutus.json"),
+    };
+    if !path.exists() {
+        return Err(ScaffoldError::BlueprintNotFound(path.display().to_string()));
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let bp: FullBlueprint =
+        serde_json::from_str(&content).map_err(|e| ScaffoldError::BlueprintParse(e.to_string()))?;
+    Ok(bp)
+}
+
+fn find_validator<'a>(
+    blueprint: &'a FullBlueprint,
+    validator: &str,
+) -> Result<&'a FullValidator, ScaffoldError> {
+    // Try matching by index first
+    if let Ok(idx) = validator.parse::<usize>() {
+        if idx < blueprint.validators.len() {
+            return Ok(&blueprint.validators[idx]);
+        }
+    }
+
+    // Match by title (exact or suffix match)
+    blueprint
+        .validators
+        .iter()
+        .find(|v| v.title == validator || v.title.ends_with(validator))
+        .ok_or_else(|| ScaffoldError::ValidatorNotFound(validator.to_string()))
+}
+
+fn parse_validator_title(title: &str) -> (String, String) {
+    let parts: Vec<&str> = title.split('.').collect();
+    if parts.len() >= 3 {
+        let purpose = parts.last().copied().unwrap_or("spend").to_string();
+        // Module name is everything before the purpose
+        let module = parts[..parts.len() - 1].join(".");
+        (module, purpose)
+    } else if parts.len() == 2 {
+        (parts[0].to_string(), parts[1].to_string())
+    } else {
+        (title.to_string(), "spend".to_string())
+    }
+}
+
+fn generate_test_content(module_name: &str, purpose: &str, validator: &FullValidator) -> String {
+    let mut lines = Vec::new();
+
+    // Module name for import (use first part)
+    let import_module = module_name.split('.').next().unwrap_or(module_name);
+
+    lines.push(format!(
+        "// Auto-generated test stub for {}",
+        validator.title
+    ));
+    lines.push(format!("// Validator purpose: {purpose}"));
+    lines.push("// Generated by utxray scaffold test".to_string());
+    lines.push(String::new());
+    lines.push(format!("use {import_module}"));
+    lines.push(String::new());
+
+    // Generate datum type hint from schema
+    let datum_hint = validator
+        .datum
+        .as_ref()
+        .and_then(|d| extract_type_name(&d.schema))
+        .unwrap_or_else(|| "Void".to_string());
+
+    let redeemer_hint = validator
+        .redeemer
+        .as_ref()
+        .and_then(|r| extract_type_name(&r.schema))
+        .unwrap_or_else(|| "Void".to_string());
+
+    let safe_name = module_name.replace('.', "_");
+
+    // Passing test
+    lines.push(format!("test {safe_name}_pass() {{"));
+    lines.push(format!(
+        "  // TODO: Construct a valid {datum_hint} datum and {redeemer_hint} redeemer"
+    ));
+    if purpose == "spend" {
+        lines.push(format!("  // let datum = ...  // {datum_hint}"));
+        lines.push(format!("  // let redeemer = ...  // {redeemer_hint}"));
+        lines.push("  // let ctx = mock_script_context()".to_string());
+        lines.push(format!(
+            "  // {import_module}.{purpose}(datum, redeemer, ctx)"
+        ));
+    } else {
+        lines.push(format!("  // let redeemer = ...  // {redeemer_hint}"));
+        lines.push("  // let ctx = mock_script_context()".to_string());
+        lines.push(format!("  // {import_module}.{purpose}(redeemer, ctx)"));
+    }
+    lines.push("  True".to_string());
+    lines.push("}".to_string());
+    lines.push(String::new());
+
+    // Failing test
+    lines.push(format!("test {safe_name}_fail() fail {{"));
+    lines.push("  // TODO: Construct inputs that should cause the validator to reject".to_string());
+    if purpose == "spend" {
+        lines.push(format!("  // let datum = ...  // {datum_hint}"));
+        lines.push(format!("  // let redeemer = ...  // {redeemer_hint}"));
+        lines.push("  // let ctx = mock_script_context()  // with invalid signer etc.".to_string());
+        lines.push(format!(
+            "  // {import_module}.{purpose}(datum, redeemer, ctx)"
+        ));
+    } else {
+        lines.push(format!("  // let redeemer = ...  // {redeemer_hint}"));
+        lines.push("  // let ctx = mock_script_context()  // with invalid conditions".to_string());
+        lines.push(format!("  // {import_module}.{purpose}(redeemer, ctx)"));
+    }
+    lines.push("  False".to_string());
+    lines.push("}".to_string());
+    lines.push(String::new());
+
+    lines.join("\n")
+}
+
+fn extract_type_name(schema: &serde_json::Value) -> Option<String> {
+    // Extract from $ref like "#/definitions/escrow~1EscrowDatum"
+    if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
+        let type_name = ref_str
+            .rsplit('/')
+            .next()
+            .unwrap_or(ref_str)
+            .replace("~1", ".");
+
+        // Get just the type name after the module prefix
+        if let Some(dot_pos) = type_name.rfind('.') {
+            return Some(type_name[dot_pos + 1..].to_string());
+        }
+        return Some(type_name);
+    }
+
+    // Check for title
+    schema
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn count_tests(content: &str) -> usize {
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with("test ")
+                && (trimmed.contains("() {") || trimmed.contains("() fail {"))
+        })
+        .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn fixture_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/escrow")
+    }
+
+    fn dir_str(dir: &PathBuf) -> &str {
+        dir.to_str().unwrap_or("/invalid")
+    }
+
+    #[test]
+    fn test_scaffold_test_valid_validator() -> TestResult {
+        let dir = fixture_dir();
+        let output = scaffold_test(dir_str(&dir), "escrow.escrow.spend", None, false)?;
+        let json = serde_json::to_value(&output)?;
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["validator"], "escrow.escrow.spend");
+        assert!(json["tests_generated"].as_u64().unwrap_or(0) >= 2);
+        assert!(json["content"].as_str().unwrap_or("").contains("test "));
+        Ok(())
+    }
+
+    #[test]
+    fn test_scaffold_test_by_index() -> TestResult {
+        let dir = fixture_dir();
+        let output = scaffold_test(dir_str(&dir), "0", None, false)?;
+        let json = serde_json::to_value(&output)?;
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["validator"], "escrow.escrow.spend");
+        Ok(())
+    }
+
+    #[test]
+    fn test_scaffold_test_mint_validator() -> TestResult {
+        let dir = fixture_dir();
+        let output = scaffold_test(dir_str(&dir), "1", None, false)?;
+        let json = serde_json::to_value(&output)?;
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["validator"], "escrow.token.mint");
+        let content = json["content"].as_str().unwrap_or("");
+        assert!(content.contains("mint"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_scaffold_test_validator_not_found() {
+        let dir = fixture_dir();
+        let result = scaffold_test(dir_str(&dir), "nonexistent", None, false);
+        assert!(matches!(result, Err(ScaffoldError::ValidatorNotFound(_))));
+    }
+
+    #[test]
+    fn test_scaffold_test_no_blueprint() {
+        let result = scaffold_test("/nonexistent/path", "0", None, false);
+        assert!(matches!(result, Err(ScaffoldError::BlueprintNotFound(_))));
+    }
+
+    #[test]
+    fn test_scaffold_test_write_file() -> TestResult {
+        let tmp_dir = tempfile::tempdir()?;
+        let tmp_path = tmp_dir.path().to_str().ok_or("invalid path")?;
+
+        // Copy plutus.json to temp dir
+        let fixture = fixture_dir().join("plutus.json");
+        let dest = tmp_dir.path().join("plutus.json");
+        std::fs::copy(&fixture, &dest)?;
+
+        let output = scaffold_test(tmp_path, "0", None, true)?;
+        let json = serde_json::to_value(&output)?;
+        assert_eq!(json["status"], "ok");
+
+        // Verify file was written
+        let generated_file = json["generated_file"].as_str().unwrap_or("");
+        assert!(Path::new(generated_file).exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_validator_title() {
+        let (module, purpose) = parse_validator_title("escrow.escrow.spend");
+        assert_eq!(module, "escrow.escrow");
+        assert_eq!(purpose, "spend");
+    }
+
+    #[test]
+    fn test_parse_validator_title_two_parts() {
+        let (module, purpose) = parse_validator_title("escrow.mint");
+        assert_eq!(module, "escrow");
+        assert_eq!(purpose, "mint");
+    }
+
+    #[test]
+    fn test_extract_type_name_from_ref() {
+        let schema = serde_json::json!({"$ref": "#/definitions/escrow~1EscrowDatum"});
+        assert_eq!(extract_type_name(&schema), Some("EscrowDatum".to_string()));
+    }
+
+    #[test]
+    fn test_extract_type_name_from_title() {
+        let schema = serde_json::json!({"title": "MyType"});
+        assert_eq!(extract_type_name(&schema), Some("MyType".to_string()));
+    }
+
+    #[test]
+    fn test_count_tests() {
+        let content = "test foo() {\n  True\n}\n\ntest bar() fail {\n  False\n}\n";
+        assert_eq!(count_tests(content), 2);
+    }
+}

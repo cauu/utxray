@@ -13,3 +13,8 @@
 ### ~~DEV-003: script-data-hash uses blake2b-256 of JSON, not CBOR~~ RESOLVED
 - **Status**: Fixed. `script-data-hash` now uses proper CBOR encoding: PlutusData JSON → pallas PlutusData → minicbor CBOR bytes. Cost models encoded as canonical CBOR map with sorted keys per Alonzo spec.
 - **Resolved in commit**: da9b274
+
+### DEV-004: test-watch deferred
+- **What**: `test-watch` is not implemented in v1
+- **Why**: Spec marks it as deferred ("对 AI 无直接价值")
+- **Status**: deferred by product decision

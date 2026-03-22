@@ -90,6 +90,14 @@ enum Commands {
     /// Blueprint operations
     #[command(subcommand)]
     Blueprint(commands::build::BlueprintCommands),
+    /// UPLC operations
+    #[command(subcommand)]
+    Uplc(commands::uplc::UplcCommands),
+    /// Run a multi-transaction test sequence
+    TestSequence(commands::test_sequence::TestSequenceArgs),
+    /// Scaffold operations (generate test stubs, etc.)
+    #[command(subcommand)]
+    Scaffold(commands::scaffold_cmd::ScaffoldCommands),
     /// Automated debug workflow
     Auto(commands::auto::AutoArgs),
     /// Check environment and tool versions
@@ -165,6 +173,9 @@ async fn main() {
         Commands::Budget(cmd) => commands::budget::handle(cmd, &ctx).await,
         Commands::Diagnose(args) => commands::diagnose::handle(args, &ctx).await,
         Commands::Blueprint(cmd) => commands::build::handle_blueprint(cmd, &ctx).await,
+        Commands::Uplc(cmd) => commands::uplc::handle(cmd, &ctx).await,
+        Commands::TestSequence(args) => commands::test_sequence::handle(args, &ctx).await,
+        Commands::Scaffold(cmd) => commands::scaffold_cmd::handle(cmd, &ctx).await,
         Commands::Auto(args) => commands::auto::handle(args, &ctx).await,
         Commands::Env => commands::env::handle(&ctx).await,
         Commands::GenContext => commands::env::handle_gen_context(&ctx).await,
