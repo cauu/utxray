@@ -608,39 +608,43 @@ pub async fn run_trace(
     let test_results = parse_test_output(&combined);
 
     // If we got test results, use the first one's data (or best match)
-    let (result_str, exec_units, traces, error_detail) = if test_results.is_empty() {
-        // No test results — aiken ran but no matching tests found
-        if aiken_out.exit_code != 0 {
-            (
-                "fail".to_string(),
-                ExecUnits { cpu: 0, mem: 0 },
-                vec![],
-                Some(format!(
-                    "aiken check failed: {}",
-                    aiken_out.raw_stderr.trim()
-                )),
-            )
+    let (result_str, exec_units, traces, error_detail, actually_executed) =
+        if test_results.is_empty() {
+            // No test results — aiken ran but no matching tests found
+            if aiken_out.exit_code != 0 {
+                (
+                    "fail".to_string(),
+                    ExecUnits { cpu: 0, mem: 0 },
+                    vec![],
+                    Some(format!(
+                        "aiken check failed: {}",
+                        aiken_out.raw_stderr.trim()
+                    )),
+                    false, // compilation failed, no execution
+                )
+            } else {
+                (
+                    "pass".to_string(),
+                    ExecUnits { cpu: 0, mem: 0 },
+                    vec!["No matching test found; validator compiled successfully".to_string()],
+                    None,
+                    false, // compiled but no test was executed
+                )
+            }
         } else {
+            // Use the first matching test result
+            let tr = &test_results[0];
             (
-                "pass".to_string(),
-                ExecUnits { cpu: 0, mem: 0 },
-                vec!["No matching test found; validator compiled successfully".to_string()],
-                None,
+                tr.result.clone(),
+                ExecUnits {
+                    cpu: tr.exec_units.cpu,
+                    mem: tr.exec_units.mem,
+                },
+                tr.traces.clone(),
+                tr.error_detail.clone(),
+                true, // test actually ran
             )
-        }
-    } else {
-        // Use the first matching test result
-        let tr = &test_results[0];
-        (
-            tr.result.clone(),
-            ExecUnits {
-                cpu: tr.exec_units.cpu,
-                mem: tr.exec_units.mem,
-            },
-            tr.traces.clone(),
-            tr.error_detail.clone(),
-        )
-    };
+        };
 
     let trace_output = TraceOutput {
         scope: "script_only".to_string(),
@@ -655,7 +659,7 @@ pub async fn run_trace(
         traces,
         error_detail,
         constructed_context,
-        execution_performed: true,
+        execution_performed: actually_executed,
     };
 
     let data = serde_json::to_value(&trace_output)

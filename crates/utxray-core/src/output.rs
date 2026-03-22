@@ -80,12 +80,25 @@ pub fn print_output<T: Serialize>(output: &Output<T>) -> std::result::Result<(),
     print_output_formatted(output, "json")
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global flag: set to true when any output with status "error" is printed.
+static ERROR_STATUS_PRINTED: AtomicBool = AtomicBool::new(false);
+
+/// Returns true if any output with status "error" has been printed during this process.
+pub fn was_error_printed() -> bool {
+    ERROR_STATUS_PRINTED.load(Ordering::SeqCst)
+}
+
 /// Output to stdout with the specified format.
 /// `format` is "json" (default) or "text" (simplified key: value rendering).
 pub fn print_output_formatted<T: Serialize>(
     output: &Output<T>,
     format: &str,
 ) -> std::result::Result<(), anyhow::Error> {
+    if matches!(output.status, Status::Error) {
+        ERROR_STATUS_PRINTED.store(true, Ordering::SeqCst);
+    }
     match format {
         "text" => {
             // Serialize to JSON Value first, then render as text

@@ -31,7 +31,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Critical,
         category: "cbor_schema",
         confidence: Confidence::High,
-        suggested_commands: &["utxray script-data-hash --tx ./tx.cbor"],
+        suggested_commands: &["utxray redeemer-index --tx ./tx.cbor", "utxray script-data-hash --redeemers <json> --datums <json> --cost-models from-network"],
     },
     Rule {
         keywords: &["budget", "exceeded"],
@@ -39,7 +39,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Critical,
         category: "execution",
         confidence: Confidence::High,
-        suggested_commands: &["utxray budget summary --from <result.json>"],
+        suggested_commands: &["utxray budget show --validator <name>"],
     },
     Rule {
         keywords: &["collateral", "missing"],
@@ -47,7 +47,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Critical,
         category: "phase1",
         confidence: Confidence::High,
-        suggested_commands: &["utxray tx build --from ./tx-spec.json"],
+        suggested_commands: &["utxray tx build --spec ./tx-spec.json"],
     },
     Rule {
         keywords: &["required", "signer", "missing"],
@@ -55,7 +55,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Critical,
         category: "phase1",
         confidence: Confidence::High,
-        suggested_commands: &["utxray tx build --from ./tx-spec.json"],
+        suggested_commands: &["utxray tx build --spec ./tx-spec.json"],
     },
     Rule {
         keywords: &["datum", "not", "found"],
@@ -64,8 +64,8 @@ const RULES: &[Rule] = &[
         category: "datum",
         confidence: Confidence::High,
         suggested_commands: &[
-            "utxray datum decode --utxo <txhash#idx>",
-            "utxray schema validate --datum <datum.json> --validator <name>",
+            "utxray datum resolve --hash <datum_hash>",
+            "utxray schema validate --validator <name> --purpose spend --datum <datum.json> --redeemer <redeemer.json>",
         ],
     },
     Rule {
@@ -90,7 +90,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Critical,
         category: "phase1",
         confidence: Confidence::Medium,
-        suggested_commands: &["utxray tx build --from ./tx-spec.json"],
+        suggested_commands: &["utxray tx build --spec ./tx-spec.json"],
     },
     Rule {
         keywords: &["schema", "mismatch"],
@@ -98,7 +98,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Critical,
         category: "cbor_schema",
         confidence: Confidence::High,
-        suggested_commands: &["utxray schema validate --datum <datum.json> --validator <name>"],
+        suggested_commands: &["utxray schema validate --validator <name> --purpose spend --datum <datum.json> --redeemer <redeemer.json>"],
     },
     Rule {
         keywords: &["type", "mismatch"],
@@ -115,7 +115,7 @@ const RULES: &[Rule] = &[
         category: "cbor_schema",
         confidence: Confidence::High,
         suggested_commands: &[
-            "utxray schema validate --datum <datum.json> --validator <name>",
+            "utxray schema validate --validator <name> --purpose spend --datum <datum.json> --redeemer <redeemer.json>",
             "utxray cbor decode --hex <datum_cbor>",
         ],
     },
@@ -125,7 +125,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Critical,
         category: "phase1",
         confidence: Confidence::Medium,
-        suggested_commands: &["utxray tx build --from ./tx-spec.json"],
+        suggested_commands: &["utxray tx build --spec ./tx-spec.json"],
     },
     Rule {
         keywords: &["min", "utxo"],
@@ -133,7 +133,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Warning,
         category: "phase1",
         confidence: Confidence::Medium,
-        suggested_commands: &["utxray tx build --from ./tx-spec.json"],
+        suggested_commands: &["utxray tx build --spec ./tx-spec.json"],
     },
     Rule {
         keywords: &["tx", "size", "exceeded"],
@@ -141,7 +141,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Warning,
         category: "phase1",
         confidence: Confidence::Medium,
-        suggested_commands: &["utxray tx build --from ./tx-spec.json"],
+        suggested_commands: &["utxray tx build --spec ./tx-spec.json"],
     },
     Rule {
         keywords: &["script", "fail"],
@@ -168,7 +168,7 @@ const RULES: &[Rule] = &[
         severity: Severity::Critical,
         category: "submit",
         confidence: Confidence::High,
-        suggested_commands: &["utxray utxo status --utxo <txhash#idx>"],
+        suggested_commands: &["utxray utxo query --address <addr>"],
     },
 ];
 

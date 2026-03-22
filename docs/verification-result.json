@@ -1,5 +1,5 @@
 {
-  "phase": 1,
+  "phase": 3,
   "all_pass": true,
   "cross_cutting": {
     "cargo_check": true,
@@ -28,6 +28,6 @@
     "passed": 392,
     "failed": 8
   },
-  "phase_checks": { "fixtures_exist": true, "coverage_updated": true, "report_updated": true, "min_test_count": true },
+  "phase_checks": { "chain_tests_exist": true, "docs_complete": true, "zero_not_impl": true, "e2e_env": true, "full_coverage": true, "e2e_tx_build": true, "e2e_schema_validate": true },
   "failing_tests": "\n"
 }

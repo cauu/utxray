@@ -190,4 +190,10 @@ async fn main() {
         let _ = print_output_formatted(&output, &format);
         std::process::exit(1);
     }
+
+    // If any command printed status: "error", exit with code 1
+    // so shell-based agent orchestration can detect failures
+    if utxray_core::output::was_error_printed() {
+        std::process::exit(1);
+    }
 }
