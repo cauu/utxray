@@ -4,6 +4,7 @@ use serde::Serialize;
 use crate::context::AppContext;
 use utxray_core::backend::blockfrost::BlockfrostBackend;
 use utxray_core::backend::{DatumInfo, UtxoInfo};
+use utxray_core::chain::utxo_diff;
 use utxray_core::output::{print_output_formatted, Output};
 
 #[derive(Subcommand, Debug)]
@@ -13,12 +14,18 @@ pub enum UtxoCommands {
         #[arg(long)]
         address: Option<String>,
     },
-    /// Diff UTxO sets before/after a transaction
+    /// Diff UTxO sets before/after a transaction or slot range
     Diff {
         #[arg(long)]
-        before: Option<String>,
+        address: Option<String>,
         #[arg(long)]
-        after: Option<String>,
+        before_tx: Option<String>,
+        #[arg(long)]
+        after_tx: Option<String>,
+        #[arg(long)]
+        before_slot: Option<u64>,
+        #[arg(long)]
+        after_slot: Option<u64>,
     },
 }
 
@@ -95,12 +102,71 @@ pub async fn handle_utxo(cmd: UtxoCommands, ctx: &AppContext) -> anyhow::Result<
             }
             Ok(())
         }
-        UtxoCommands::Diff { .. } => {
-            let output = Output::error(serde_json::json!({
-                "error_code": "NOT_IMPLEMENTED",
-                "message": "command 'utxo diff' is not yet implemented"
-            }));
-            print_output_formatted(&output, format)?;
+        UtxoCommands::Diff {
+            address,
+            before_tx,
+            after_tx,
+            before_slot,
+            after_slot,
+        } => {
+            let address = match address {
+                Some(a) => a,
+                None => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "MISSING_ARGUMENT",
+                        "message": "--address is required"
+                    }));
+                    print_output_formatted(&output, format)?;
+                    return Ok(());
+                }
+            };
+
+            let backend = match get_blockfrost(ctx) {
+                Ok(b) => b,
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "BACKEND_NOT_CONFIGURED",
+                        "message": e.to_string()
+                    }));
+                    print_output_formatted(&output, format)?;
+                    return Ok(());
+                }
+            };
+
+            // Determine mode: by_tx or by_slot
+            if let (Some(bt), Some(at)) = (before_tx, after_tx) {
+                match utxo_diff::diff_by_tx(&address, &bt, &at, &backend).await {
+                    Ok(output) => {
+                        print_output_formatted(&output, format)?;
+                    }
+                    Err(e) => {
+                        let output = Output::error(serde_json::json!({
+                            "error_code": "UTXO_DIFF_FAILED",
+                            "message": e.to_string()
+                        }));
+                        print_output_formatted(&output, format)?;
+                    }
+                }
+            } else if let (Some(bs), Some(a_s)) = (before_slot, after_slot) {
+                match utxo_diff::diff_by_slot(&address, bs, a_s, &backend).await {
+                    Ok(output) => {
+                        print_output_formatted(&output, format)?;
+                    }
+                    Err(e) => {
+                        let output = Output::error(serde_json::json!({
+                            "error_code": "UTXO_DIFF_FAILED",
+                            "message": e.to_string()
+                        }));
+                        print_output_formatted(&output, format)?;
+                    }
+                }
+            } else {
+                let output = Output::error(serde_json::json!({
+                    "error_code": "MISSING_ARGUMENT",
+                    "message": "either (--before-tx + --after-tx) or (--before-slot + --after-slot) is required"
+                }));
+                print_output_formatted(&output, format)?;
+            }
             Ok(())
         }
     }

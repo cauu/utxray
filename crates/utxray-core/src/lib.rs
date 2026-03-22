@@ -2,6 +2,7 @@ pub mod aiken;
 pub mod backend;
 pub mod build;
 pub mod cbor;
+pub mod chain;
 pub mod config;
 pub mod diagnose;
 pub mod env;

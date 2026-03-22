@@ -1,5 +1,6 @@
 use clap::{Args, Subcommand};
 use utxray_core::cbor::decode::{decode_cbor_hex, DecodeErrorData};
+use utxray_core::cbor::diff::{diff_cbor_hex, CborDiffErrorData};
 use utxray_core::cbor::redeemer_index::{analyze_redeemer_index, RedeemerIndexErrorData};
 use utxray_core::cbor::script_data_hash::{compute_script_data_hash, ScriptDataHashErrorData};
 use utxray_core::output::{print_output_formatted, Output};
@@ -44,6 +45,23 @@ pub struct RedeemerIndexArgs {
     pub purpose: Option<String>,
 }
 
+/// Resolve a CBOR input: if it looks like a file path, read its contents;
+/// otherwise treat it as inline hex.
+fn resolve_cbor_input(input: &str) -> String {
+    let is_file = input.contains('/')
+        || input.contains('\\')
+        || input.ends_with(".hex")
+        || input.ends_with(".cbor");
+    if is_file {
+        match std::fs::read_to_string(input) {
+            Ok(contents) => contents.trim().to_string(),
+            Err(_) => input.to_string(),
+        }
+    } else {
+        input.to_string()
+    }
+}
+
 pub async fn handle_cbor(cmd: CborCommands, ctx: &AppContext) -> anyhow::Result<()> {
     let format = &ctx.format;
     match cmd {
@@ -86,12 +104,43 @@ pub async fn handle_cbor(cmd: CborCommands, ctx: &AppContext) -> anyhow::Result<
             }
             Ok(())
         }
-        CborCommands::Diff { .. } => {
-            let output = Output::error(serde_json::json!({
-                "error_code": "NOT_IMPLEMENTED",
-                "message": "command 'cbor diff' is not yet implemented"
-            }));
-            print_output_formatted(&output, format)?;
+        CborCommands::Diff { left, right } => {
+            let left_input = match left {
+                Some(l) => l,
+                None => {
+                    let output = Output::error(CborDiffErrorData {
+                        error: "--left is required (hex string or file path)".to_string(),
+                    });
+                    print_output_formatted(&output, format)?;
+                    return Ok(());
+                }
+            };
+            let right_input = match right {
+                Some(r) => r,
+                None => {
+                    let output = Output::error(CborDiffErrorData {
+                        error: "--right is required (hex string or file path)".to_string(),
+                    });
+                    print_output_formatted(&output, format)?;
+                    return Ok(());
+                }
+            };
+
+            // Resolve inputs: could be hex strings or file paths
+            let left_hex = resolve_cbor_input(&left_input);
+            let right_hex = resolve_cbor_input(&right_input);
+
+            match diff_cbor_hex(&left_hex, &right_hex) {
+                Ok(output) => {
+                    print_output_formatted(&output, format)?;
+                }
+                Err(e) => {
+                    let output = Output::error(CborDiffErrorData {
+                        error: e.to_string(),
+                    });
+                    print_output_formatted(&output, format)?;
+                }
+            }
             Ok(())
         }
     }

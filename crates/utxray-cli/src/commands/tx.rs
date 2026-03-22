@@ -7,6 +7,7 @@ use utxray_core::backend::EvaluatedRedeemer;
 use utxray_core::output::{print_output_formatted, Output};
 use utxray_core::tx::builder;
 use utxray_core::tx::signer;
+use utxray_core::tx::simulator;
 use utxray_core::tx::submitter;
 
 #[derive(Subcommand, Debug)]
@@ -27,6 +28,12 @@ pub enum TxCommands {
     Simulate {
         #[arg(long)]
         tx: Option<String>,
+        #[arg(long)]
+        backend: Option<String>,
+        #[arg(long)]
+        additional_utxo: Option<String>,
+        #[arg(long)]
+        slot: Option<u64>,
     },
     /// Sign a transaction
     Sign {
@@ -171,12 +178,60 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        TxCommands::Simulate { .. } => {
-            let output = Output::error(serde_json::json!({
-                "error_code": "NOT_IMPLEMENTED",
-                "message": "command 'tx simulate' is not yet implemented"
-            }));
-            print_output_formatted(&output, format)?;
+        TxCommands::Simulate {
+            tx,
+            backend: _backend_flag,
+            additional_utxo: _additional_utxo,
+            slot: _slot,
+        } => {
+            let tx_arg = match tx {
+                Some(t) => t,
+                None => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "MISSING_ARGUMENT",
+                        "message": "--tx <cbor_hex_or_file> is required"
+                    }));
+                    print_output_formatted(&output, format)?;
+                    return Ok(());
+                }
+            };
+
+            let backend = match get_blockfrost(ctx) {
+                Ok(b) => b,
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "BACKEND_NOT_CONFIGURED",
+                        "message": e.to_string()
+                    }));
+                    print_output_formatted(&output, format)?;
+                    return Ok(());
+                }
+            };
+
+            let cbor_hex = match read_tx_cbor(&tx_arg).await {
+                Ok(h) => h,
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "TX_READ_FAILED",
+                        "message": e.to_string()
+                    }));
+                    print_output_formatted(&output, format)?;
+                    return Ok(());
+                }
+            };
+
+            match simulator::simulate_tx(&cbor_hex, &backend, "blockfrost").await {
+                Ok(output) => {
+                    print_output_formatted(&output, format)?;
+                }
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "SIMULATE_FAILED",
+                        "message": e.to_string()
+                    }));
+                    print_output_formatted(&output, format)?;
+                }
+            }
             Ok(())
         }
         TxCommands::Sign {
