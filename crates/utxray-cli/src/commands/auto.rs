@@ -1,6 +1,7 @@
 use clap::Args;
 
 use crate::context::AppContext;
+use utxray_core::output::{print_output, Output};
 
 #[derive(Args, Debug)]
 pub struct AutoArgs {
@@ -19,5 +20,10 @@ pub struct AutoArgs {
 }
 
 pub async fn handle(_args: AutoArgs, _ctx: &AppContext) -> anyhow::Result<()> {
-    anyhow::bail!("command 'auto' not yet implemented")
+    let output = Output::error(serde_json::json!({
+        "error_code": "NOT_IMPLEMENTED",
+        "message": "command 'auto' is not yet implemented"
+    }));
+    print_output(&output)?;
+    Ok(())
 }

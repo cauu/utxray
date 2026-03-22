@@ -1,7 +1,7 @@
 use clap::Subcommand;
 
 use crate::context::AppContext;
-use utxray_core::output::print_output;
+use utxray_core::output::{print_output, Output};
 
 #[derive(Subcommand, Debug)]
 pub enum BlueprintCommands {
@@ -28,5 +28,10 @@ pub async fn handle_build(_watch: bool, ctx: &AppContext) -> anyhow::Result<()> 
 }
 
 pub async fn handle_blueprint(_cmd: BlueprintCommands, _ctx: &AppContext) -> anyhow::Result<()> {
-    anyhow::bail!("command 'blueprint' not yet implemented")
+    let output = Output::error(serde_json::json!({
+        "error_code": "NOT_IMPLEMENTED",
+        "message": "command 'blueprint' is not yet implemented"
+    }));
+    print_output(&output)?;
+    Ok(())
 }

@@ -105,7 +105,7 @@ pub struct SchemaErrorData {
 ///
 /// `project_dir` - path to project root (where plutus.json lives)
 /// `validator` - validator name or index (e.g. "escrow.escrow.spend" or "0")
-/// `purpose` - spend, mint, withdraw, publish
+/// `purpose` - spend, mint, withdrawal, certificate, propose, vote (aliases: withdraw, cert)
 /// `datum_json` - optional datum as JSON string or file path
 /// `redeemer_json` - redeemer as JSON string or file path
 pub fn validate_schema(

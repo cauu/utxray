@@ -86,7 +86,12 @@ pub async fn handle_cbor(cmd: CborCommands, _ctx: &AppContext) -> anyhow::Result
             Ok(())
         }
         CborCommands::Diff { .. } => {
-            anyhow::bail!("command 'cbor diff' not yet implemented")
+            let output = Output::error(serde_json::json!({
+                "error_code": "NOT_IMPLEMENTED",
+                "message": "command 'cbor diff' is not yet implemented"
+            }));
+            print_output(&output)?;
+            Ok(())
         }
     }
 }

@@ -4,7 +4,7 @@
 //! for bech32 address decoding.
 
 use pallas_addresses::Address;
-use pallas_codec::utils::{Bytes, NonEmptyKeyValuePairs, NonEmptySet, Nullable, Set};
+use pallas_codec::utils::{Bytes, NonEmptyKeyValuePairs, NonEmptySet, Nullable, PositiveCoin, Set};
 use pallas_crypto::hash::Hash;
 use pallas_primitives::alonzo::TransactionInput;
 use pallas_primitives::conway::{
@@ -27,6 +27,9 @@ const MIN_FEE_CONSTANT: u64 = 155_381;
 /// Default execution units for placeholders when not specified.
 const DEFAULT_EX_UNITS_MEM: u64 = 500_000;
 const DEFAULT_EX_UNITS_STEPS: u64 = 200_000_000;
+
+/// Minimum lovelace per output (simplified check: 1 ADA).
+const MIN_UTXO_LOVELACE: u64 = 1_000_000;
 
 /// Parse a UTxO reference string "txhash#index" into TransactionInput.
 fn parse_utxo_ref(utxo: &str) -> Result<TransactionInput, TxBuildError> {
@@ -104,6 +107,117 @@ fn parse_keyhash_28(hex_str: &str) -> Result<Hash<28>, TxBuildError> {
     )?))
 }
 
+/// A map of policy_id (hex) -> asset_name -> amount for tracking multi-asset values.
+type TokenMap = BTreeMap<String, BTreeMap<String, u64>>;
+
+/// Sum tokens from all inputs that have value.tokens specified.
+fn sum_input_tokens(spec: &TxSpec) -> TokenMap {
+    let mut tokens: TokenMap = BTreeMap::new();
+    for input in &spec.inputs {
+        if let Some(ref val) = input.value {
+            if let Some(ref toks) = val.tokens {
+                merge_tokens(&mut tokens, toks);
+            }
+        }
+    }
+    for si in &spec.script_inputs {
+        if let Some(ref val) = si.value {
+            if let Some(ref toks) = val.tokens {
+                merge_tokens(&mut tokens, toks);
+            }
+        }
+    }
+    tokens
+}
+
+/// Sum tokens from all outputs.
+fn sum_output_tokens(spec: &TxSpec) -> TokenMap {
+    let mut tokens: TokenMap = BTreeMap::new();
+    for output in &spec.outputs {
+        if let Some(ref toks) = output.value.tokens {
+            merge_tokens(&mut tokens, toks);
+        }
+    }
+    tokens
+}
+
+/// Merge source tokens into dest (additive).
+fn merge_tokens(
+    dest: &mut TokenMap,
+    source: &std::collections::HashMap<String, std::collections::HashMap<String, u64>>,
+) {
+    for (policy, assets) in source {
+        let policy_entry = dest.entry(policy.clone()).or_default();
+        for (asset_name, &amount) in assets {
+            *policy_entry.entry(asset_name.clone()).or_insert(0) += amount;
+        }
+    }
+}
+
+/// Compute remaining tokens: input_tokens - output_tokens.
+/// Returns only entries with amount > 0.
+fn remaining_tokens(input_tokens: &TokenMap, output_tokens: &TokenMap) -> TokenMap {
+    let mut remaining: TokenMap = input_tokens.clone();
+    for (policy, assets) in output_tokens {
+        if let Some(policy_entry) = remaining.get_mut(policy) {
+            for (asset_name, &amount) in assets {
+                if let Some(entry) = policy_entry.get_mut(asset_name) {
+                    *entry = entry.saturating_sub(amount);
+                }
+            }
+        }
+    }
+    // Remove zero entries
+    remaining.retain(|_, assets| {
+        assets.retain(|_, amount| *amount > 0);
+        !assets.is_empty()
+    });
+    remaining
+}
+
+/// Build a pallas Multiasset value from a TokenMap.
+fn build_multiasset_value(lovelace: u64, tokens: &TokenMap) -> Result<Value, TxBuildError> {
+    if tokens.is_empty() {
+        return Ok(Value::Coin(lovelace));
+    }
+
+    let mut outer_pairs = Vec::new();
+    for (policy_hex, assets) in tokens {
+        let policy_bytes = hex::decode(policy_hex).map_err(|e| {
+            TxBuildError::InvalidSpec(format!("invalid policy ID hex '{policy_hex}': {e}"))
+        })?;
+        let mut policy_id = vec![0u8; 28];
+        let copy_len = policy_bytes.len().min(28);
+        policy_id[..copy_len].copy_from_slice(&policy_bytes[..copy_len]);
+
+        let pid: Hash<28> =
+            Hash::from(<[u8; 28]>::try_from(policy_id.as_slice()).map_err(|_| {
+                TxBuildError::InvalidSpec("policy ID must be 28 bytes".to_string())
+            })?);
+
+        let inner_pairs: Vec<(Bytes, PositiveCoin)> = assets
+            .iter()
+            .filter_map(|(name, &amount)| {
+                PositiveCoin::try_from(amount)
+                    .ok()
+                    .map(|pc| (Bytes::from(name.as_bytes().to_vec()), pc))
+            })
+            .collect();
+
+        if let Ok(inner) = NonEmptyKeyValuePairs::try_from(inner_pairs) {
+            outer_pairs.push((pid, inner));
+        }
+    }
+
+    if outer_pairs.is_empty() {
+        return Ok(Value::Coin(lovelace));
+    }
+
+    let multiasset = NonEmptyKeyValuePairs::try_from(outer_pairs)
+        .map_err(|_| TxBuildError::InvalidSpec("failed to create multiasset".to_string()))?;
+    Ok(Value::Multiasset(lovelace, multiasset))
+}
+
 /// Build a Conway-era transaction output.
 fn build_tx_output(
     address: &str,
@@ -113,6 +227,25 @@ fn build_tx_output(
     let addr_bytes = decode_address(address)?;
 
     let value = Value::Coin(lovelace);
+
+    Ok(PseudoTransactionOutput::PostAlonzo(
+        PostAlonzoTransactionOutput {
+            address: addr_bytes,
+            value,
+            datum_option: None,
+            script_ref: None,
+        },
+    ))
+}
+
+/// Build a Conway-era transaction output with optional multi-asset tokens.
+fn build_tx_output_with_tokens(
+    address: &str,
+    lovelace: u64,
+    tokens: &TokenMap,
+) -> Result<PseudoTransactionOutput<PostAlonzoTransactionOutput>, TxBuildError> {
+    let addr_bytes = decode_address(address)?;
+    let value = build_multiasset_value(lovelace, tokens)?;
 
     Ok(PseudoTransactionOutput::PostAlonzo(
         PostAlonzoTransactionOutput {
@@ -137,12 +270,14 @@ fn network_id_from_str(network: &str) -> NetworkId {
 /// Build the Conway transaction body from a TxSpec.
 ///
 /// `change_lovelace`: if `Some(amount)`, a change output is appended to `change_address`.
+/// `change_tokens`: if non-empty, the change output includes these tokens.
 /// `script_data_hash`: if `Some(hash)`, it is set on the transaction body.
 /// `network`: the target network name (e.g., "mainnet", "preview", "preprod").
 fn build_transaction_body(
     spec: &TxSpec,
     fee: u64,
     change_lovelace: Option<u64>,
+    change_tokens: &TokenMap,
     script_data_hash: Option<Hash<32>>,
     network: &str,
 ) -> Result<TransactionBody, TxBuildError> {
@@ -172,11 +307,27 @@ fn build_transaction_body(
         )?);
     }
 
-    // Append change output if we have computed change
+    // Append change output if we have computed change (with any remaining tokens)
     if let Some(change_ada) = change_lovelace {
-        if change_ada > 0 {
-            outputs.push(build_tx_output(&spec.change_address, change_ada, &None)?);
+        if change_ada > 0 || !change_tokens.is_empty() {
+            let lovelace = if change_ada > 0 {
+                change_ada
+            } else {
+                MIN_UTXO_LOVELACE
+            };
+            outputs.push(build_tx_output_with_tokens(
+                &spec.change_address,
+                lovelace,
+                change_tokens,
+            )?);
         }
+    } else if !change_tokens.is_empty() {
+        // Tokens remaining but no lovelace change computed; include with min-UTxO
+        outputs.push(build_tx_output_with_tokens(
+            &spec.change_address,
+            MIN_UTXO_LOVELACE,
+            change_tokens,
+        )?);
     }
 
     // TTL (validity.to_slot)
@@ -347,11 +498,17 @@ fn build_witness_set(
         let tag = match si.purpose.as_str() {
             "spend" => RedeemerTag::Spend,
             "mint" => RedeemerTag::Mint,
-            "cert" => RedeemerTag::Cert,
-            "reward" => RedeemerTag::Reward,
+            "withdrawal" | "withdraw" => RedeemerTag::Reward,
+            "certificate" | "cert" => RedeemerTag::Cert,
+            "propose" | "vote" => {
+                return Err(TxBuildError::InvalidSpec(format!(
+                    "purpose '{}' requires Conway governance support (not yet available in pallas 0.30)",
+                    si.purpose
+                )));
+            }
             _ => {
                 return Err(TxBuildError::InvalidSpec(format!(
-                    "unknown purpose: {}",
+                    "unknown purpose '{}'; expected one of: spend, mint, withdrawal, certificate, propose, vote (aliases: withdraw, cert)",
                     si.purpose
                 )));
             }
@@ -580,8 +737,8 @@ pub fn parse_exec_units_file(path: &str) -> Result<ExecUnitsMap, TxBuildError> {
         let tag = match tag_str {
             "spend" => RedeemerTag::Spend,
             "mint" => RedeemerTag::Mint,
-            "cert" => RedeemerTag::Cert,
-            "reward" => RedeemerTag::Reward,
+            "cert" | "certificate" => RedeemerTag::Cert,
+            "reward" | "withdrawal" | "withdraw" => RedeemerTag::Reward,
             _ => {
                 return Err(TxBuildError::InvalidSpec(format!(
                     "unknown redeemer tag in exec-units: {tag_str}"
@@ -650,10 +807,23 @@ pub fn build_cbor_tx(
         );
     }
 
+    // Compute remaining tokens for the change output
+    let input_tokens = sum_input_tokens(spec);
+    let output_tokens = sum_output_tokens(spec);
+    let change_tokens = remaining_tokens(&input_tokens, &output_tokens);
+    if !change_tokens.is_empty() && !can_balance {
+        warnings.push(
+            "input tokens are not fully consumed by outputs, but input values are incomplete; \
+             remaining tokens will be included in the change output with min-UTxO lovelace."
+                .to_string(),
+        );
+    }
+    let empty_tokens: TokenMap = BTreeMap::new();
+
     // First pass: build with a placeholder fee (and no change) to estimate size
     let placeholder_fee: u64 = 200_000;
 
-    let body = build_transaction_body(spec, placeholder_fee, None, sdh, network)?;
+    let body = build_transaction_body(spec, placeholder_fee, None, &empty_tokens, sdh, network)?;
     let witness_set_pass1 = build_witness_set(spec, exec_units)?;
     let tx: Tx = PseudoTx {
         transaction_body: body,
@@ -693,7 +863,16 @@ pub fn build_cbor_tx(
         }
         let change = total_in - required;
         if change > 0 {
-            Some(change)
+            if change < MIN_UTXO_LOVELACE {
+                // Change is below min-UTxO threshold; absorb into fee instead
+                fee += change;
+                warnings.push(format!(
+                    "change output ({change} lovelace) is below min-UTxO ({MIN_UTXO_LOVELACE} lovelace); absorbed into fee"
+                ));
+                None
+            } else {
+                Some(change)
+            }
         } else {
             None
         }
@@ -701,8 +880,18 @@ pub fn build_cbor_tx(
         None
     };
 
-    // Second pass with calculated fee and change output
-    let body = build_transaction_body(spec, fee, change_lovelace, sdh, network)?;
+    // Check that all explicit outputs meet min-UTxO
+    for (i, output) in spec.outputs.iter().enumerate() {
+        if output.value.lovelace < MIN_UTXO_LOVELACE {
+            return Err(TxBuildError::InvalidSpec(format!(
+                "outputs[{i}] has {lovelace} lovelace, below the minimum UTxO requirement of {MIN_UTXO_LOVELACE} lovelace (1 ADA)",
+                lovelace = output.value.lovelace
+            )));
+        }
+    }
+
+    // Second pass with calculated fee and change output (including remaining tokens)
+    let body = build_transaction_body(spec, fee, change_lovelace, &change_tokens, sdh, network)?;
     let witness_set_pass2 = build_witness_set(spec, exec_units)?;
     let tx: Tx = PseudoTx {
         transaction_body: body,

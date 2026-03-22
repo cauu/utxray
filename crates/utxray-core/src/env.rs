@@ -54,17 +54,28 @@ pub struct NetworkTipInfo {
 }
 
 /// Check the environment: aiken installation, config status, backends.
+///
+/// `network_override` takes precedence over `config.network.default` when provided
+/// as a non-empty string. This allows the CLI `--network` flag to override the config.
 pub async fn check_env(
     config: &Config,
     project_dir: &str,
     config_loaded: bool,
+    network_override: &str,
 ) -> Result<EnvInfo, anyhow::Error> {
     let aiken = check_aiken().await;
+
+    // Use CLI --network override if provided; otherwise fall back to config default
+    let effective_network = if network_override.is_empty() {
+        config.network.default.clone()
+    } else {
+        network_override.to_string()
+    };
 
     let config_info = ConfigInfo {
         loaded: config_loaded,
         project: project_dir.to_string(),
-        network: config.network.default.clone(),
+        network: effective_network.clone(),
     };
 
     let bf_configured = config.blockfrost.project_id.is_some();
@@ -79,7 +90,7 @@ pub async fn check_env(
     // If blockfrost is configured, try a health check and tip query
     let (blockfrost_info, network_tip) = if let Some(ref project_id) = config.blockfrost.project_id
     {
-        let network = &config.network.default;
+        let network = &effective_network;
         match BlockfrostBackend::new(project_id, network) {
             Ok(backend) => {
                 let healthy = backend.health().await.unwrap_or(false);

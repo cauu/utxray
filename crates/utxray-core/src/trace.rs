@@ -8,8 +8,27 @@ use crate::error::BudgetSource;
 use crate::output::Output;
 use crate::test_cmd::{parse_test_output, ExecUnits};
 
-/// Valid purposes for the trace command.
-const VALID_PURPOSES: &[&str] = &["spend", "mint", "withdraw", "publish"];
+/// Valid purposes for the trace command (spec names + common aliases).
+const VALID_PURPOSES: &[&str] = &[
+    "spend",
+    "mint",
+    "withdrawal",
+    "withdraw",
+    "certificate",
+    "cert",
+    "propose",
+    "vote",
+];
+
+/// Normalize a purpose alias to the canonical spec name.
+/// `withdraw` -> `withdrawal`, `cert` -> `certificate`. Others unchanged.
+fn normalize_purpose(purpose: &str) -> &str {
+    match purpose {
+        "withdraw" => "withdrawal",
+        "cert" => "certificate",
+        _ => purpose,
+    }
+}
 
 /// Trace output data.
 #[derive(Debug, Serialize)]
@@ -48,7 +67,7 @@ pub enum TraceError {
     #[error("validator '{0}' not found in blueprint")]
     ValidatorNotFound(String),
 
-    #[error("purpose '{0}' is invalid; expected one of: spend, mint, withdraw, publish")]
+    #[error("purpose '{0}' is invalid; expected one of: spend, mint, withdrawal, certificate, propose, vote (aliases: withdraw, cert)")]
     InvalidPurpose(String),
 
     #[error("redeemer is required")]
@@ -256,8 +275,8 @@ fn build_minimal_script_context(
         serde_json::json!({})
     };
 
-    // Build withdrawals: for withdraw purpose
-    let withdrawals = if purpose == "withdraw" {
+    // Build withdrawals: for withdrawal purpose
+    let withdrawals = if purpose == "withdrawal" {
         serde_json::json!({
             validator_hash: 0
         })
@@ -284,10 +303,10 @@ fn build_minimal_script_context(
         "mint" => serde_json::json!({
             "Mint": validator_hash
         }),
-        "withdraw" => serde_json::json!({
+        "withdrawal" => serde_json::json!({
             "Withdraw": validator_hash
         }),
-        "publish" => serde_json::json!({
+        "certificate" => serde_json::json!({
             "Publish": 0
         }),
         _ => serde_json::json!(null),
@@ -345,12 +364,12 @@ fn build_minimal_script_context(
         "mint" => serde_json::json!({
             "Mint": validator_hash
         }),
-        "withdraw" => serde_json::json!({
+        "withdrawal" => serde_json::json!({
             "Withdraw": {
                 "Script": validator_hash
             }
         }),
-        "publish" => serde_json::json!({
+        "certificate" => serde_json::json!({
             "Publish": {
                 "index": 0,
                 "certificate": null
@@ -379,6 +398,16 @@ pub async fn run_trace(
         let output = Output::error(serde_json::json!({
             "error_code": "INVALID_PURPOSE",
             "message": TraceError::InvalidPurpose(config.purpose).to_string()
+        }));
+        return Ok(output);
+    }
+
+    // Normalize purpose alias and check Conway governance support
+    let normalized_purpose = normalize_purpose(&config.purpose).to_string();
+    if normalized_purpose == "propose" || normalized_purpose == "vote" {
+        let output = Output::error(serde_json::json!({
+            "error_code": "NOT_IMPLEMENTED",
+            "message": format!("purpose '{}' requires Conway governance support (not yet available in pallas 0.30)", normalized_purpose)
         }));
         return Ok(output);
     }
@@ -465,7 +494,7 @@ pub async fn run_trace(
     let validator_hash = bp_info.hash;
 
     // For spend purpose, datum is required if the blueprint declares a datum schema
-    if config.purpose == "spend" && config.datum.is_none() {
+    if normalized_purpose == "spend" && config.datum.is_none() {
         let datum_required = has_datum_schema.unwrap_or(true);
         if datum_required {
             let output = Output::error(serde_json::json!({
@@ -513,7 +542,7 @@ pub async fn run_trace(
     // Build the minimal ScriptContext for Mode A (no user-supplied context)
     let constructed_context = if !has_context {
         Some(build_minimal_script_context(
-            &config.purpose,
+            &normalized_purpose,
             &validator_hash,
             datum_value.as_ref(),
             &redeemer_value,
@@ -532,7 +561,7 @@ pub async fn run_trace(
             let trace_output = TraceOutput {
                 scope: "script_only".to_string(),
                 validator: validator_title,
-                purpose: config.purpose,
+                purpose: normalized_purpose.clone(),
                 context_mode: context_mode.to_string(),
                 auto_filled_fields,
                 cost_fidelity: cost_fidelity.to_string(),
@@ -606,7 +635,7 @@ pub async fn run_trace(
     let trace_output = TraceOutput {
         scope: "script_only".to_string(),
         validator: validator_title,
-        purpose: config.purpose,
+        purpose: normalized_purpose,
         context_mode: context_mode.to_string(),
         auto_filled_fields,
         cost_fidelity: cost_fidelity.to_string(),
@@ -782,9 +811,26 @@ mod tests {
     fn test_valid_purposes() {
         assert!(VALID_PURPOSES.contains(&"spend"));
         assert!(VALID_PURPOSES.contains(&"mint"));
+        assert!(VALID_PURPOSES.contains(&"withdrawal"));
         assert!(VALID_PURPOSES.contains(&"withdraw"));
-        assert!(VALID_PURPOSES.contains(&"publish"));
+        assert!(VALID_PURPOSES.contains(&"certificate"));
+        assert!(VALID_PURPOSES.contains(&"cert"));
+        assert!(VALID_PURPOSES.contains(&"propose"));
+        assert!(VALID_PURPOSES.contains(&"vote"));
         assert!(!VALID_PURPOSES.contains(&"stake"));
+        assert!(!VALID_PURPOSES.contains(&"publish"));
+    }
+
+    #[test]
+    fn test_normalize_purpose() {
+        assert_eq!(normalize_purpose("withdraw"), "withdrawal");
+        assert_eq!(normalize_purpose("cert"), "certificate");
+        assert_eq!(normalize_purpose("spend"), "spend");
+        assert_eq!(normalize_purpose("mint"), "mint");
+        assert_eq!(normalize_purpose("withdrawal"), "withdrawal");
+        assert_eq!(normalize_purpose("certificate"), "certificate");
+        assert_eq!(normalize_purpose("propose"), "propose");
+        assert_eq!(normalize_purpose("vote"), "vote");
     }
 
     #[tokio::test]
@@ -1078,7 +1124,7 @@ mod tests {
         let redeemer = serde_json::json!({"constructor": 1, "fields": []});
         let hash = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
 
-        let ctx = build_minimal_script_context("withdraw", hash, None, &redeemer, None, &[]);
+        let ctx = build_minimal_script_context("withdrawal", hash, None, &redeemer, None, &[]);
 
         let tx = &ctx["transaction"];
         // Withdrawals should contain the credential

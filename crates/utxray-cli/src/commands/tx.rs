@@ -171,7 +171,12 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
             Ok(())
         }
         TxCommands::Simulate { .. } => {
-            anyhow::bail!("command 'tx simulate' not yet implemented")
+            let output = Output::error(serde_json::json!({
+                "error_code": "NOT_IMPLEMENTED",
+                "message": "command 'tx simulate' is not yet implemented"
+            }));
+            print_output(&output)?;
+            Ok(())
         }
         TxCommands::Sign {
             tx,

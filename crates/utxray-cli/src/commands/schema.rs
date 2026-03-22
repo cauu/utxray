@@ -12,7 +12,7 @@ pub enum SchemaCommands {
         #[arg(long)]
         validator: String,
 
-        /// Purpose: spend, mint, withdraw, publish
+        /// Purpose: spend, mint, withdrawal, certificate, propose, vote (aliases: withdraw, cert)
         #[arg(long)]
         purpose: String,
 

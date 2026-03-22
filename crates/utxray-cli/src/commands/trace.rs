@@ -10,7 +10,7 @@ pub struct TraceArgs {
     #[arg(long)]
     pub validator: String,
 
-    /// Validator purpose: spend, mint, withdraw, publish
+    /// Validator purpose: spend, mint, withdrawal, certificate, propose, vote (aliases: withdraw, cert)
     #[arg(long)]
     pub purpose: String,
 

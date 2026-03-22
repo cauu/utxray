@@ -95,7 +95,12 @@ pub async fn handle_utxo(cmd: UtxoCommands, ctx: &AppContext) -> anyhow::Result<
             Ok(())
         }
         UtxoCommands::Diff { .. } => {
-            anyhow::bail!("command 'utxo diff' not yet implemented")
+            let output = Output::error(serde_json::json!({
+                "error_code": "NOT_IMPLEMENTED",
+                "message": "command 'utxo diff' is not yet implemented"
+            }));
+            print_output(&output)?;
+            Ok(())
         }
     }
 }

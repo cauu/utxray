@@ -74,11 +74,64 @@ impl<T: Serialize> Output<T> {
     }
 }
 
-/// Output to stdout. Format is determined by AppContext.
+/// Output to stdout in JSON format (default).
 pub fn print_output<T: Serialize>(output: &Output<T>) -> std::result::Result<(), anyhow::Error> {
     let json = serde_json::to_string_pretty(output)?;
     println!("{json}");
     Ok(())
+}
+
+/// Output to stdout with the specified format.
+/// `format` is "json" (default) or "text" (simplified key: value rendering).
+pub fn print_output_formatted<T: Serialize>(
+    output: &Output<T>,
+    format: &str,
+) -> std::result::Result<(), anyhow::Error> {
+    match format {
+        "text" => {
+            // Serialize to JSON Value first, then render as text
+            let value = serde_json::to_value(output)?;
+            println!(
+                "status: {}",
+                value
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+            );
+            println!(
+                "v: {}",
+                value.get("v").and_then(|v| v.as_str()).unwrap_or("unknown")
+            );
+            if let Some(obj) = value.as_object() {
+                for (key, val) in obj {
+                    if key == "status" || key == "v" || key == "warnings" {
+                        continue;
+                    }
+                    match val {
+                        serde_json::Value::String(s) => println!("{key}: {s}"),
+                        serde_json::Value::Number(n) => println!("{key}: {n}"),
+                        serde_json::Value::Bool(b) => println!("{key}: {b}"),
+                        serde_json::Value::Null => println!("{key}: null"),
+                        _ => {
+                            // For complex values, use compact JSON
+                            let compact = serde_json::to_string(val)?;
+                            println!("{key}: {compact}");
+                        }
+                    }
+                }
+            }
+            if !output.warnings.is_empty() {
+                for w in &output.warnings {
+                    println!("warning: {}", w.message);
+                }
+            }
+            Ok(())
+        }
+        _ => {
+            // Default: JSON
+            print_output(output)
+        }
+    }
 }
 
 #[cfg(test)]

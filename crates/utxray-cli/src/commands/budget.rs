@@ -1,6 +1,7 @@
 use clap::Subcommand;
 
 use crate::context::AppContext;
+use utxray_core::output::{print_output, Output};
 
 #[derive(Subcommand, Debug)]
 pub enum BudgetCommands {
@@ -19,5 +20,10 @@ pub enum BudgetCommands {
 }
 
 pub async fn handle(_cmd: BudgetCommands, _ctx: &AppContext) -> anyhow::Result<()> {
-    anyhow::bail!("command 'budget' not yet implemented")
+    let output = Output::error(serde_json::json!({
+        "error_code": "NOT_IMPLEMENTED",
+        "message": "command 'budget' is not yet implemented"
+    }));
+    print_output(&output)?;
+    Ok(())
 }

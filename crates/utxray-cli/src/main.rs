@@ -4,7 +4,7 @@ mod commands;
 mod context;
 
 use context::AppContext;
-use utxray_core::output::{print_output, Output};
+use utxray_core::output::{print_output, print_output_formatted, Output};
 
 #[derive(Parser)]
 #[command(
@@ -169,13 +169,13 @@ async fn main() {
         Commands::GenContext => commands::env::handle_gen_context(&ctx).await,
     };
 
-    // Unified error handling -> structured JSON output, never panic
+    // Unified error handling -> structured output, never panic
     if let Err(e) = result {
         let output = Output::error(serde_json::json!({
             "error_code": "INTERNAL_ERROR",
             "message": e.to_string()
         }));
-        let _ = print_output(&output);
+        let _ = print_output_formatted(&output, &format);
         std::process::exit(1);
     }
 }

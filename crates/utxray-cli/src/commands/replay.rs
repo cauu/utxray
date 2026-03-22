@@ -1,6 +1,6 @@
 use clap::Subcommand;
 
-use utxray_core::output::print_output;
+use utxray_core::output::{print_output, Output};
 use utxray_core::replay::{bundle, runner};
 
 use crate::context::AppContext;
@@ -54,7 +54,11 @@ pub async fn handle(cmd: ReplayCommands, ctx: &AppContext) -> anyhow::Result<()>
             print_output(&result)?;
         }
         ReplayCommands::Diff { .. } => {
-            anyhow::bail!("command 'replay diff' not yet implemented")
+            let output = Output::error(serde_json::json!({
+                "error_code": "NOT_IMPLEMENTED",
+                "message": "command 'replay diff' is not yet implemented"
+            }));
+            print_output(&output)?;
         }
     }
     Ok(())
