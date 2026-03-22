@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::context::AppContext;
 use utxray_core::backend::blockfrost::BlockfrostBackend;
 use utxray_core::backend::{DatumInfo, UtxoInfo};
-use utxray_core::output::{print_output, Output};
+use utxray_core::output::{print_output_formatted, Output};
 
 #[derive(Subcommand, Debug)]
 pub enum UtxoCommands {
@@ -53,6 +53,7 @@ fn get_blockfrost(ctx: &AppContext) -> anyhow::Result<BlockfrostBackend> {
 }
 
 pub async fn handle_utxo(cmd: UtxoCommands, ctx: &AppContext) -> anyhow::Result<()> {
+    let format = &ctx.format;
     match cmd {
         UtxoCommands::Query { address } => {
             let address = match address {
@@ -62,7 +63,7 @@ pub async fn handle_utxo(cmd: UtxoCommands, ctx: &AppContext) -> anyhow::Result<
                         "error_code": "MISSING_ARGUMENT",
                         "message": "--address is required"
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -74,7 +75,7 @@ pub async fn handle_utxo(cmd: UtxoCommands, ctx: &AppContext) -> anyhow::Result<
                         "error_code": "BACKEND_NOT_CONFIGURED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -82,14 +83,14 @@ pub async fn handle_utxo(cmd: UtxoCommands, ctx: &AppContext) -> anyhow::Result<
             match backend.query_utxos(&address).await {
                 Ok(utxos) => {
                     let output = Output::ok(UtxoQueryOutput { utxos });
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
                 Err(e) => {
                     let output = Output::error(serde_json::json!({
                         "error_code": "QUERY_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
             }
             Ok(())
@@ -99,13 +100,14 @@ pub async fn handle_utxo(cmd: UtxoCommands, ctx: &AppContext) -> anyhow::Result<
                 "error_code": "NOT_IMPLEMENTED",
                 "message": "command 'utxo diff' is not yet implemented"
             }));
-            print_output(&output)?;
+            print_output_formatted(&output, format)?;
             Ok(())
         }
     }
 }
 
 pub async fn handle_datum(cmd: DatumCommands, ctx: &AppContext) -> anyhow::Result<()> {
+    let format = &ctx.format;
     match cmd {
         DatumCommands::Resolve { hash } => {
             let hash = match hash {
@@ -115,7 +117,7 @@ pub async fn handle_datum(cmd: DatumCommands, ctx: &AppContext) -> anyhow::Resul
                         "error_code": "MISSING_ARGUMENT",
                         "message": "--hash is required"
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -127,7 +129,7 @@ pub async fn handle_datum(cmd: DatumCommands, ctx: &AppContext) -> anyhow::Resul
                         "error_code": "BACKEND_NOT_CONFIGURED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -143,7 +145,7 @@ pub async fn handle_datum(cmd: DatumCommands, ctx: &AppContext) -> anyhow::Resul
                         source,
                         decoded: Some(decoded),
                     });
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
                 Ok(None) => {
                     // Not found -> status ok, source "unresolved"
@@ -152,14 +154,14 @@ pub async fn handle_datum(cmd: DatumCommands, ctx: &AppContext) -> anyhow::Resul
                         source: "unresolved".to_string(),
                         decoded: None,
                     });
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
                 Err(e) => {
                     let output = Output::error(serde_json::json!({
                         "error_code": "RESOLVE_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
             }
             Ok(())

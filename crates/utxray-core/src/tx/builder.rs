@@ -138,6 +138,35 @@ pub fn parse_tx_spec(json_str: &str) -> Result<TxSpec, TxBuildError> {
     serde_json::from_str::<TxSpec>(json_str).map_err(|e| TxBuildError::InvalidSpec(e.to_string()))
 }
 
+/// Validate that a UTxO reference string matches the expected format: `<64-hex>#<integer>`.
+fn validate_utxo_ref_format(utxo: &str, context: &str) -> Result<(), TxBuildError> {
+    let parts: Vec<&str> = utxo.splitn(2, '#').collect();
+    if parts.len() != 2 {
+        return Err(TxBuildError::InvalidSpec(format!(
+            "{context}: UTxO reference must be '<64-hex>#<integer>', got '{utxo}'"
+        )));
+    }
+    let tx_hash = parts[0];
+    let index_str = parts[1];
+    if tx_hash.len() != 64 {
+        return Err(TxBuildError::InvalidSpec(format!(
+            "{context}: tx hash must be exactly 64 hex chars (32 bytes), got {} chars in '{utxo}'",
+            tx_hash.len()
+        )));
+    }
+    if hex::decode(tx_hash).is_err() {
+        return Err(TxBuildError::InvalidSpec(format!(
+            "{context}: tx hash contains invalid hex chars in '{utxo}'"
+        )));
+    }
+    if index_str.parse::<u64>().is_err() {
+        return Err(TxBuildError::InvalidSpec(format!(
+            "{context}: UTxO index must be a non-negative integer, got '{index_str}' in '{utxo}'"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate that a parsed TxSpec has all required fields with reasonable values.
 pub fn validate_tx_spec(spec: &TxSpec) -> Result<(), TxBuildError> {
     if spec.inputs.is_empty() && spec.script_inputs.is_empty() {
@@ -161,20 +190,24 @@ pub fn validate_tx_spec(spec: &TxSpec) -> Result<(), TxBuildError> {
         ));
     }
 
+    // Validate input UTxO references
     for (i, input) in spec.inputs.iter().enumerate() {
         if input.utxo.is_empty() {
             return Err(TxBuildError::InvalidSpec(format!(
                 "input[{i}].utxo is empty"
             )));
         }
+        validate_utxo_ref_format(&input.utxo, &format!("inputs[{i}]"))?;
     }
 
+    // Validate script input UTxO references
     for (i, si) in spec.script_inputs.iter().enumerate() {
         if si.utxo.is_empty() {
             return Err(TxBuildError::InvalidSpec(format!(
                 "script_inputs[{i}].utxo is empty"
             )));
         }
+        validate_utxo_ref_format(&si.utxo, &format!("script_inputs[{i}]"))?;
         if si.validator.is_empty() {
             return Err(TxBuildError::InvalidSpec(format!(
                 "script_inputs[{i}].validator is empty"
@@ -182,10 +215,55 @@ pub fn validate_tx_spec(spec: &TxSpec) -> Result<(), TxBuildError> {
         }
     }
 
+    // Validate collateral UTxO reference format
+    if let Some(ref coll) = spec.collateral {
+        validate_utxo_ref_format(coll, "collateral")?;
+    }
+
+    // Validate output addresses
     for (i, output) in spec.outputs.iter().enumerate() {
         if output.address.is_empty() {
             return Err(TxBuildError::InvalidSpec(format!(
                 "outputs[{i}].address is empty"
+            )));
+        }
+    }
+
+    // Validate mint policy_ids and asset names
+    if let Some(ref mint_map) = spec.mint {
+        for (policy_hex, entry) in mint_map {
+            if policy_hex.len() != 56 {
+                return Err(TxBuildError::InvalidSpec(format!(
+                    "mint policy_id must be exactly 56 hex chars (28 bytes), got {} chars: '{policy_hex}'",
+                    policy_hex.len()
+                )));
+            }
+            if hex::decode(policy_hex).is_err() {
+                return Err(TxBuildError::InvalidSpec(format!(
+                    "mint policy_id contains invalid hex chars: '{policy_hex}'"
+                )));
+            }
+            for asset_name in entry.assets.keys() {
+                if !asset_name.is_empty() && hex::decode(asset_name).is_err() {
+                    return Err(TxBuildError::InvalidSpec(format!(
+                        "mint asset_name must be valid hex-encoded bytes, got '{asset_name}' under policy '{policy_hex}'"
+                    )));
+                }
+            }
+        }
+    }
+
+    // Validate required_signers are 56 hex chars
+    for (i, signer) in spec.required_signers.iter().enumerate() {
+        if signer.len() != 56 {
+            return Err(TxBuildError::InvalidSpec(format!(
+                "required_signers[{i}] must be exactly 56 hex chars (28 bytes), got {} chars: '{signer}'",
+                signer.len()
+            )));
+        }
+        if hex::decode(signer).is_err() {
+            return Err(TxBuildError::InvalidSpec(format!(
+                "required_signers[{i}] contains invalid hex chars: '{signer}'"
             )));
         }
     }
@@ -456,7 +534,7 @@ mod tests {
     #[test]
     fn test_validate_no_outputs() -> TestResult {
         let json = r#"{
-            "inputs": [{"utxo": "abc#0", "type": "pubkey"}],
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
             "outputs": [],
             "change_address": "addr"
         }"#;
@@ -471,7 +549,7 @@ mod tests {
         let json = r#"{
             "inputs": [],
             "script_inputs": [
-                {"utxo": "def#1", "validator": "v.spend", "purpose": "spend",
+                {"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#1", "validator": "v.spend", "purpose": "spend",
                  "datum": {}, "redeemer": {}}
             ],
             "outputs": [{"address": "addr", "value": {"lovelace": 1}}],
@@ -496,20 +574,20 @@ mod tests {
     #[test]
     fn test_extract_scripts_with_mint() -> TestResult {
         let json = r#"{
-            "inputs": [{"utxo": "abc#0", "type": "pubkey"}],
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
             "script_inputs": [
-                {"utxo": "def#1", "validator": "escrow.spend", "purpose": "spend",
+                {"utxo": "1122334411223344112233441122334411223344112233441122334411223344#1", "validator": "escrow.spend", "purpose": "spend",
                  "datum": {}, "redeemer": {}}
             ],
             "outputs": [{"address": "addr", "value": {"lovelace": 1}}],
             "mint": {
-                "d4e5f6": {
-                    "assets": {"MyToken": 1},
+                "d4e5f6d4e5f6d4e5f6d4e5f6d4e5f6d4e5f6d4e5f6d4e5f6d4e5f6d4": {
+                    "assets": {"4d79546f6b656e": 1},
                     "redeemer": {"constructor": 0, "fields": []},
                     "validator": "token.mint"
                 }
             },
-            "collateral": "abc#2",
+            "collateral": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#2",
             "change_address": "addr"
         }"#;
         let spec = parse_tx_spec(json)?;
@@ -611,6 +689,136 @@ mod tests {
         let json = serde_json::to_value(&output)?;
         assert_eq!(json["status"], "error");
         assert_eq!(json["error_code"], "TX_BUILD_FAILED");
+        Ok(())
+    }
+
+    // --- PL-03: Strict tx build validation regression tests ---
+
+    #[test]
+    fn test_validate_short_utxo_hash_rejected() -> TestResult {
+        let json = r#"{
+            "inputs": [{"utxo": "abc123#0", "type": "pubkey"}],
+            "outputs": [{"address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": {"lovelace": 5000000}}],
+            "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let result = validate_tx_spec(&spec);
+        assert!(result.is_err());
+        let err = result.err().ok_or("expected error")?.to_string();
+        assert!(err.contains("64 hex chars"), "got: {err}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_utxo_missing_hash_separator() -> TestResult {
+        let json = r#"{
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd0", "type": "pubkey"}],
+            "outputs": [{"address": "addr", "value": {"lovelace": 5000000}}],
+            "change_address": "addr"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let result = validate_tx_spec(&spec);
+        assert!(result.is_err());
+        let err = result.err().ok_or("expected error")?.to_string();
+        assert!(err.contains("<64-hex>#<integer>"), "got: {err}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_collateral_format_invalid() -> TestResult {
+        let json = r#"{
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
+            "script_inputs": [
+                {"utxo": "1122334411223344112233441122334411223344112233441122334411223344#1",
+                 "validator": "v.spend", "purpose": "spend", "datum": {}, "redeemer": {}}
+            ],
+            "outputs": [{"address": "addr", "value": {"lovelace": 5000000}}],
+            "collateral": "short#0",
+            "change_address": "addr"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let result = validate_tx_spec(&spec);
+        assert!(result.is_err());
+        let err = result.err().ok_or("expected error")?.to_string();
+        assert!(err.contains("collateral"), "got: {err}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_mint_short_policy_id_rejected() -> TestResult {
+        let json = r#"{
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
+            "outputs": [{"address": "addr", "value": {"lovelace": 5000000}}],
+            "mint": {
+                "aabbcc": {
+                    "assets": {"4d79546f6b656e": 1},
+                    "redeemer": {"constructor": 0, "fields": []},
+                    "validator": "token.mint"
+                }
+            },
+            "collateral": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#2",
+            "change_address": "addr"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let result = validate_tx_spec(&spec);
+        assert!(result.is_err());
+        let err = result.err().ok_or("expected error")?.to_string();
+        assert!(
+            err.contains("policy_id") && err.contains("56 hex chars"),
+            "got: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_mint_invalid_asset_name_rejected() -> TestResult {
+        let json = r#"{
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
+            "outputs": [{"address": "addr", "value": {"lovelace": 5000000}}],
+            "mint": {
+                "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd": {
+                    "assets": {"not-valid-hex!": 1},
+                    "redeemer": {"constructor": 0, "fields": []},
+                    "validator": "token.mint"
+                }
+            },
+            "collateral": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#2",
+            "change_address": "addr"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let result = validate_tx_spec(&spec);
+        assert!(result.is_err());
+        let err = result.err().ok_or("expected error")?.to_string();
+        assert!(
+            err.contains("asset_name") && err.contains("hex"),
+            "got: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_required_signer_wrong_length_rejected() -> TestResult {
+        let json = r#"{
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
+            "outputs": [{"address": "addr", "value": {"lovelace": 5000000}}],
+            "required_signers": ["aabbcc"],
+            "change_address": "addr"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let result = validate_tx_spec(&spec);
+        assert!(result.is_err());
+        let err = result.err().ok_or("expected error")?.to_string();
+        assert!(
+            err.contains("required_signers") && err.contains("56 hex chars"),
+            "got: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_valid_spec_passes() -> TestResult {
+        let spec = parse_tx_spec(sample_spec_json())?;
+        validate_tx_spec(&spec)?;
         Ok(())
     }
 }

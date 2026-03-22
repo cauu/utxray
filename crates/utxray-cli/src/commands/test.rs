@@ -1,7 +1,7 @@
 use clap::Args;
 
 use crate::context::AppContext;
-use utxray_core::output::print_output;
+use utxray_core::output::print_output_formatted;
 
 #[derive(Args, Debug)]
 pub struct TestArgs {
@@ -24,6 +24,6 @@ pub async fn handle(args: TestArgs, ctx: &AppContext) -> anyhow::Result<()> {
         args.seed,
     )
     .await?;
-    print_output(&output)?;
+    print_output_formatted(&output, &ctx.format)?;
     Ok(())
 }

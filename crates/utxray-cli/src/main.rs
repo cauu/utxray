@@ -4,7 +4,7 @@ mod commands;
 mod context;
 
 use context::AppContext;
-use utxray_core::output::{print_output, print_output_formatted, Output};
+use utxray_core::output::{print_output_formatted, Output};
 
 #[derive(Parser)]
 #[command(
@@ -98,12 +98,12 @@ enum Commands {
     GenContext,
 }
 
-fn print_json_error(error_code: &str, message: &str) {
+fn print_formatted_error(error_code: &str, message: &str, format: &str) {
     let output = Output::error(serde_json::json!({
         "error_code": error_code,
         "message": message,
     }));
-    let _ = print_output(&output);
+    let _ = print_output_formatted(&output, format);
 }
 
 #[tokio::main]
@@ -119,19 +119,20 @@ async fn main() {
                 let _ = e.print();
                 std::process::exit(0);
             }
-            // For all other errors (unknown command, missing args, etc.), output structured JSON
-            print_json_error("INVALID_COMMAND", &e.to_string());
+            // For all other errors (unknown command, missing args, etc.), output structured JSON.
+            // We cannot know the --format flag here since parsing failed, so default to JSON.
+            print_formatted_error("INVALID_COMMAND", &e.to_string(), "json");
             std::process::exit(1);
         }
     };
 
     let format = cli.format.clone();
 
-    // Config load failure -> structured JSON error + exit 1
+    // Config load failure -> structured error + exit 1
     let config = match utxray_core::config::load(&cli.project) {
         Ok(c) => c,
         Err(e) => {
-            print_json_error("CONFIG_LOAD_FAILED", &format!("{e}"));
+            print_formatted_error("CONFIG_LOAD_FAILED", &format!("{e}"), &format);
             std::process::exit(1);
         }
     };

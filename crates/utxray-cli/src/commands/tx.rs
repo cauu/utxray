@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::context::AppContext;
 use utxray_core::backend::blockfrost::BlockfrostBackend;
 use utxray_core::backend::EvaluatedRedeemer;
-use utxray_core::output::{print_output, Output};
+use utxray_core::output::{print_output_formatted, Output};
 use utxray_core::tx::builder;
 use utxray_core::tx::signer;
 use utxray_core::tx::submitter;
@@ -86,6 +86,7 @@ async fn read_tx_cbor(tx_arg: &str) -> anyhow::Result<String> {
 }
 
 pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
+    let format = &ctx.format;
     match cmd {
         TxCommands::Build { spec, exec_units } => {
             let spec_path = match spec {
@@ -95,7 +96,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "MISSING_ARGUMENT",
                         "message": "--spec <tx-spec.json> is required"
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -110,7 +111,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                 ctx.include_raw,
                 &ctx.network,
             );
-            print_output(&output)?;
+            print_output_formatted(&output, format)?;
             Ok(())
         }
         TxCommands::Evaluate { tx } => {
@@ -121,7 +122,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "MISSING_ARGUMENT",
                         "message": "--tx <cbor_hex_or_file> is required"
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -133,7 +134,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "BACKEND_NOT_CONFIGURED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -145,7 +146,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "TX_READ_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -158,14 +159,14 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         budget_source: "tx_evaluate".to_string(),
                         redeemers: eval_result.redeemers,
                     });
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
                 Err(e) => {
                     let output = Output::error(serde_json::json!({
                         "error_code": "EVALUATE_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
             }
             Ok(())
@@ -175,7 +176,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                 "error_code": "NOT_IMPLEMENTED",
                 "message": "command 'tx simulate' is not yet implemented"
             }));
-            print_output(&output)?;
+            print_output_formatted(&output, format)?;
             Ok(())
         }
         TxCommands::Sign {
@@ -190,7 +191,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "MISSING_ARGUMENT",
                         "message": "--tx <cbor_hex_or_file> is required"
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -202,7 +203,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "MISSING_ARGUMENT",
                         "message": "--signing-key <skey-file> is required"
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -214,7 +215,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "TX_READ_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -226,7 +227,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "INVALID_HEX",
                         "message": format!("invalid transaction hex: {e}")
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -238,7 +239,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "SIGN_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -251,7 +252,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                     "error_code": "WRITE_FAILED",
                     "message": format!("failed to write signed tx to '{}': {}", out_path, e)
                 }));
-                print_output(&output)?;
+                print_output_formatted(&output, format)?;
                 return Ok(());
             }
 
@@ -259,7 +260,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                 is_signed: true,
                 tx_file: out_path,
             });
-            print_output(&output)?;
+            print_output_formatted(&output, format)?;
             Ok(())
         }
         TxCommands::Submit { tx, allow_mainnet } => {
@@ -270,7 +271,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "MISSING_ARGUMENT",
                         "message": "--tx <cbor_hex_or_file> is required"
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -282,7 +283,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                     "severity": "critical",
                     "message": "Refusing to submit to mainnet without --allow-mainnet flag."
                 }));
-                print_output(&output)?;
+                print_output_formatted(&output, format)?;
                 return Ok(());
             }
 
@@ -293,7 +294,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "BACKEND_NOT_CONFIGURED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -305,7 +306,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "error_code": "TX_READ_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -314,7 +315,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                 .await
             {
                 Ok(output) => {
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
                 Err(e) => {
                     let (error_code, severity) = match &e {
@@ -328,7 +329,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                         "severity": severity,
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
             }
             Ok(())

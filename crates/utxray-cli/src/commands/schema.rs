@@ -2,7 +2,7 @@ use clap::Subcommand;
 
 use crate::context::AppContext;
 use utxray_core::cbor::schema::{self, SchemaErrorData, SchemaValidateError};
-use utxray_core::output::{print_output, Output};
+use utxray_core::output::{print_output_formatted, Output};
 
 #[derive(Subcommand, Debug)]
 pub enum SchemaCommands {
@@ -39,6 +39,7 @@ pub async fn handle(cmd: SchemaCommands, ctx: &AppContext) -> anyhow::Result<()>
             &purpose,
             datum.as_deref(),
             &redeemer,
+            &ctx.format,
         ),
     }
 }
@@ -49,10 +50,11 @@ fn handle_validate(
     purpose: &str,
     datum: Option<&str>,
     redeemer: &str,
+    format: &str,
 ) -> anyhow::Result<()> {
     match schema::validate_schema(project, validator, purpose, datum, redeemer) {
         Ok(output) => {
-            print_output(&output)?;
+            print_output_formatted(&output, format)?;
         }
         Err(e) => {
             let (error_code, message) = match &e {
@@ -88,7 +90,7 @@ fn handle_validate(
                 error_code,
                 message,
             });
-            print_output(&output)?;
+            print_output_formatted(&output, format)?;
         }
     }
     Ok(())

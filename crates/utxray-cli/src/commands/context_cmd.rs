@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::context::AppContext;
 use utxray_core::backend::blockfrost::BlockfrostBackend;
 use utxray_core::backend::TipInfo;
-use utxray_core::output::{print_output, Output};
+use utxray_core::output::{print_output_formatted, Output};
 
 #[derive(Subcommand, Debug)]
 pub enum ContextCommands {
@@ -33,6 +33,7 @@ fn get_blockfrost(ctx: &AppContext) -> anyhow::Result<BlockfrostBackend> {
 }
 
 pub async fn handle(cmd: ContextCommands, ctx: &AppContext) -> anyhow::Result<()> {
+    let format = &ctx.format;
     match cmd {
         ContextCommands::Params => {
             let backend = match get_blockfrost(ctx) {
@@ -42,7 +43,7 @@ pub async fn handle(cmd: ContextCommands, ctx: &AppContext) -> anyhow::Result<()
                         "error_code": "BACKEND_NOT_CONFIGURED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -50,14 +51,14 @@ pub async fn handle(cmd: ContextCommands, ctx: &AppContext) -> anyhow::Result<()
             match backend.query_params().await {
                 Ok(params) => {
                     let output = Output::ok(ParamsOutput { params });
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
                 Err(e) => {
                     let output = Output::error(serde_json::json!({
                         "error_code": "QUERY_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
             }
             Ok(())
@@ -70,7 +71,7 @@ pub async fn handle(cmd: ContextCommands, ctx: &AppContext) -> anyhow::Result<()
                         "error_code": "BACKEND_NOT_CONFIGURED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                     return Ok(());
                 }
             };
@@ -78,14 +79,14 @@ pub async fn handle(cmd: ContextCommands, ctx: &AppContext) -> anyhow::Result<()
             match backend.query_tip().await {
                 Ok(tip) => {
                     let output = Output::ok(TipOutput { tip });
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
                 Err(e) => {
                     let output = Output::error(serde_json::json!({
                         "error_code": "QUERY_FAILED",
                         "message": e.to_string()
                     }));
-                    print_output(&output)?;
+                    print_output_formatted(&output, format)?;
                 }
             }
             Ok(())

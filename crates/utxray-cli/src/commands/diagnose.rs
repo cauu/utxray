@@ -1,7 +1,7 @@
 use clap::Args;
 
 use utxray_core::diagnose;
-use utxray_core::output::print_output;
+use utxray_core::output::print_output_formatted;
 
 use crate::context::AppContext;
 
@@ -15,8 +15,8 @@ pub struct DiagnoseArgs {
     pub tx: Option<String>,
 }
 
-pub async fn handle(args: DiagnoseArgs, _ctx: &AppContext) -> anyhow::Result<()> {
+pub async fn handle(args: DiagnoseArgs, ctx: &AppContext) -> anyhow::Result<()> {
     let output = diagnose::run_diagnose(args.from.as_deref()).await?;
-    print_output(&output)?;
+    print_output_formatted(&output, &ctx.format)?;
     Ok(())
 }

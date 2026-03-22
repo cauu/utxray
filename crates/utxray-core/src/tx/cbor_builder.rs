@@ -175,6 +175,33 @@ fn remaining_tokens(input_tokens: &TokenMap, output_tokens: &TokenMap) -> TokenM
     remaining
 }
 
+/// Validate that a policy ID is exactly 56 hex chars (28 bytes).
+fn validate_policy_id(policy_hex: &str) -> Result<(), TxBuildError> {
+    if policy_hex.len() != 56 {
+        return Err(TxBuildError::InvalidSpec(format!(
+            "policy_id must be exactly 56 hex chars (28 bytes), got {} chars: '{policy_hex}'",
+            policy_hex.len()
+        )));
+    }
+    hex::decode(policy_hex).map_err(|e| {
+        TxBuildError::InvalidSpec(format!("invalid policy_id hex '{policy_hex}': {e}"))
+    })?;
+    Ok(())
+}
+
+/// Validate that an asset name is valid hex (even length, valid hex chars).
+/// Empty string is allowed (represents the empty asset name).
+fn validate_asset_name_hex(name: &str) -> Result<Vec<u8>, TxBuildError> {
+    if name.is_empty() {
+        return Ok(Vec::new());
+    }
+    hex::decode(name).map_err(|e| {
+        TxBuildError::InvalidSpec(format!(
+            "asset_name must be valid hex-encoded bytes, got '{name}': {e}"
+        ))
+    })
+}
+
 /// Build a pallas Multiasset value from a TokenMap.
 fn build_multiasset_value(lovelace: u64, tokens: &TokenMap) -> Result<Value, TxBuildError> {
     if tokens.is_empty() {
@@ -183,26 +210,24 @@ fn build_multiasset_value(lovelace: u64, tokens: &TokenMap) -> Result<Value, TxB
 
     let mut outer_pairs = Vec::new();
     for (policy_hex, assets) in tokens {
+        validate_policy_id(policy_hex)?;
+
         let policy_bytes = hex::decode(policy_hex).map_err(|e| {
             TxBuildError::InvalidSpec(format!("invalid policy ID hex '{policy_hex}': {e}"))
         })?;
-        let mut policy_id = vec![0u8; 28];
-        let copy_len = policy_bytes.len().min(28);
-        policy_id[..copy_len].copy_from_slice(&policy_bytes[..copy_len]);
 
         let pid: Hash<28> =
-            Hash::from(<[u8; 28]>::try_from(policy_id.as_slice()).map_err(|_| {
+            Hash::from(<[u8; 28]>::try_from(policy_bytes.as_slice()).map_err(|_| {
                 TxBuildError::InvalidSpec("policy ID must be 28 bytes".to_string())
             })?);
 
-        let inner_pairs: Vec<(Bytes, PositiveCoin)> = assets
-            .iter()
-            .filter_map(|(name, &amount)| {
-                PositiveCoin::try_from(amount)
-                    .ok()
-                    .map(|pc| (Bytes::from(name.as_bytes().to_vec()), pc))
-            })
-            .collect();
+        let mut inner_pairs = Vec::new();
+        for (name, &amount) in assets {
+            let name_bytes = validate_asset_name_hex(name)?;
+            if let Ok(pc) = PositiveCoin::try_from(amount) {
+                inner_pairs.push((Bytes::from(name_bytes), pc));
+            }
+        }
 
         if let Ok(inner) = NonEmptyKeyValuePairs::try_from(inner_pairs) {
             outer_pairs.push((pid, inner));
@@ -417,22 +442,22 @@ fn build_mint(spec: &TxSpec) -> Result<Option<pallas_primitives::conway::Mint>, 
     let mut policy_entries: BTreeMap<Vec<u8>, Vec<(Vec<u8>, i64)>> = BTreeMap::new();
 
     for (policy_hex, entry) in mint_map {
+        validate_policy_id(policy_hex)?;
+
         let policy_bytes = hex::decode(policy_hex).map_err(|e| {
             TxBuildError::InvalidSpec(format!("invalid policy ID hex '{policy_hex}': {e}"))
         })?;
 
-        // Pad policy ID to 28 bytes if needed
-        let mut policy_id = vec![0u8; 28];
-        let copy_len = policy_bytes.len().min(28);
-        policy_id[..copy_len].copy_from_slice(&policy_bytes[..copy_len]);
+        let mut assets: Vec<(Vec<u8>, i64)> = Vec::new();
+        for (name, &amount) in &entry.assets {
+            let name_bytes = validate_asset_name_hex(name)?;
+            assets.push((name_bytes, amount as i64));
+        }
 
-        let assets: Vec<(Vec<u8>, i64)> = entry
-            .assets
-            .iter()
-            .map(|(name, &amount)| (name.as_bytes().to_vec(), amount as i64))
-            .collect();
-
-        policy_entries.entry(policy_id).or_default().extend(assets);
+        policy_entries
+            .entry(policy_bytes)
+            .or_default()
+            .extend(assets);
     }
 
     let mut outer_pairs = Vec::new();
@@ -1037,7 +1062,7 @@ mod tests {
             ],
             "mint": {
                 "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd": {
-                    "assets": {"MyToken": 1},
+                    "assets": {"4d79546f6b656e": 1},
                     "redeemer": {"constructor": 0, "fields": []},
                     "validator": "token.mint"
                 }

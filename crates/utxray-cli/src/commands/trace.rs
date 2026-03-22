@@ -1,7 +1,7 @@
 use clap::Args;
 
 use crate::context::AppContext;
-use utxray_core::output::print_output;
+use utxray_core::output::print_output_formatted;
 use utxray_core::trace::{run_trace, TraceConfig};
 
 #[derive(Args, Debug)]
@@ -47,6 +47,6 @@ pub async fn handle(args: TraceArgs, ctx: &AppContext) -> anyhow::Result<()> {
     };
 
     let output = run_trace(&ctx.project, config).await?;
-    print_output(&output)?;
+    print_output_formatted(&output, &ctx.format)?;
     Ok(())
 }

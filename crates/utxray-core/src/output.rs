@@ -75,10 +75,9 @@ impl<T: Serialize> Output<T> {
 }
 
 /// Output to stdout in JSON format (default).
+/// Prefer `print_output_formatted` to respect the user's `--format` flag.
 pub fn print_output<T: Serialize>(output: &Output<T>) -> std::result::Result<(), anyhow::Error> {
-    let json = serde_json::to_string_pretty(output)?;
-    println!("{json}");
-    Ok(())
+    print_output_formatted(output, "json")
 }
 
 /// Output to stdout with the specified format.
@@ -129,7 +128,9 @@ pub fn print_output_formatted<T: Serialize>(
         }
         _ => {
             // Default: JSON
-            print_output(output)
+            let json = serde_json::to_string_pretty(output)?;
+            println!("{json}");
+            Ok(())
         }
     }
 }
