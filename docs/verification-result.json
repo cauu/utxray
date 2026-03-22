@@ -11,8 +11,8 @@
     "std_process_count": 0
   },
   "test_summary": {
-    "total": 231,
-    "passed": 223,
+    "total": 250,
+    "passed": 242,
     "failed": 8
   },
   "phase_checks": { "fixtures_exist": true, "coverage_updated": true, "report_updated": true, "min_test_count": true },
