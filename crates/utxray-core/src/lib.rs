@@ -1,5 +1,6 @@
 pub mod aiken;
 pub mod backend;
+pub mod budget;
 pub mod build;
 pub mod cbor;
 pub mod chain;

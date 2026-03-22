@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn test_utxo_change_serialize() {
+    fn test_utxo_change_serialize() -> Result<(), Box<dyn std::error::Error>> {
         let change = UtxoChange {
             tx_hash: "abc123".to_string(),
             index: 0,
@@ -197,10 +197,11 @@ mod tests {
         assert_eq!(json["change_type"], "added");
         // Empty tokens should be skipped
         assert!(json.get("tokens").is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_utxo_diff_output_serialize() {
+    fn test_utxo_diff_output_serialize() -> Result<(), Box<dyn std::error::Error>> {
         let output = UtxoDiffOutput {
             address: "addr_test1".to_string(),
             mode: "by_tx".to_string(),
@@ -214,5 +215,6 @@ mod tests {
         assert_eq!(json["mode"], "by_tx");
         assert_eq!(json["current_utxo_count"], 3);
         assert_eq!(json["current_lovelace_total"], 10_000_000);
+        Ok(())
     }
 }

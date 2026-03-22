@@ -271,15 +271,16 @@ mod tests {
     }
 
     #[test]
-    fn test_exunits_output_serialize() {
+    fn test_exunits_output_serialize() -> Result<(), Box<dyn std::error::Error>> {
         let eu = ExUnitsOutput { cpu: 100, mem: 200 };
         let json = serde_json::to_value(&eu)?;
         assert_eq!(json["cpu"], 100);
         assert_eq!(json["mem"], 200);
+        Ok(())
     }
 
     #[test]
-    fn test_balance_check_serialize() {
+    fn test_balance_check_serialize() -> Result<(), Box<dyn std::error::Error>> {
         let bc = BalanceCheck {
             ok: true,
             total_in: 1000,
@@ -291,5 +292,6 @@ mod tests {
         assert_eq!(json["total_in"], 1000);
         assert_eq!(json["total_out"], 800);
         assert_eq!(json["fee"], 200);
+        Ok(())
     }
 }

@@ -1,7 +1,7 @@
 use clap::Subcommand;
 
-use utxray_core::output::{print_output_formatted, Output};
-use utxray_core::replay::{bundle, runner};
+use utxray_core::output::print_output_formatted;
+use utxray_core::replay::{bundle, diff, runner};
 
 use crate::context::AppContext;
 
@@ -54,12 +54,9 @@ pub async fn handle(cmd: ReplayCommands, ctx: &AppContext) -> anyhow::Result<()>
             let result = runner::run_bundle(bundle_path.as_deref(), &ctx.project).await?;
             print_output_formatted(&result, format)?;
         }
-        ReplayCommands::Diff { .. } => {
-            let output = Output::error(serde_json::json!({
-                "error_code": "NOT_IMPLEMENTED",
-                "message": "command 'replay diff' is not yet implemented"
-            }));
-            print_output_formatted(&output, format)?;
+        ReplayCommands::Diff { before, after } => {
+            let result = diff::diff_results(before.as_deref(), after.as_deref())?;
+            print_output_formatted(&result, format)?;
         }
     }
     Ok(())
