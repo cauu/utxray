@@ -118,6 +118,27 @@ pub fn compute_script_data_hash(
     }))
 }
 
+/// Compute the script data hash from pre-encoded CBOR byte slices.
+///
+/// This is the lower-level API used by the tx builder, which already has
+/// CBOR-encoded redeemers, datums, and cost models. The hash is:
+///   blake2b_256(redeemers_cbor || datums_cbor || cost_models_cbor)
+///
+/// If `datums_cbor` is empty, it is included as zero bytes (per ledger spec,
+/// when there are no datums the datums component is empty).
+pub fn compute_hash_from_parts(
+    redeemers_cbor: &[u8],
+    datums_cbor: &[u8],
+    cost_models_cbor: &[u8],
+) -> [u8; 32] {
+    let mut hasher = pallas_crypto::hash::Hasher::<256>::new();
+    hasher.input(redeemers_cbor);
+    hasher.input(datums_cbor);
+    hasher.input(cost_models_cbor);
+    let hash = hasher.finalize();
+    *hash
+}
+
 // ── Internal helpers ───────────────────────────────────────────
 
 /// Read a JSON input from either an inline JSON string or a file path.
@@ -150,7 +171,9 @@ fn read_json_input(
 }
 
 /// Encode an array of PlutusData JSON values into a CBOR array.
-fn encode_plutus_data_array(items: &[serde_json::Value]) -> Result<Vec<u8>, ScriptDataHashError> {
+pub(crate) fn encode_plutus_data_array(
+    items: &[serde_json::Value],
+) -> Result<Vec<u8>, ScriptDataHashError> {
     let mut plutus_items = Vec::with_capacity(items.len());
     for item in items {
         let pd = json_to_plutus_data(item)?;
@@ -186,7 +209,7 @@ fn language_key(name: &str) -> Result<u64, ScriptDataHashError> {
 ///
 /// Keys are sorted numerically (shorter CBOR encoding first, then lexicographic).
 /// Since keys are single unsigned integers 0, 1, 2, numerical order suffices.
-fn encode_cost_models(json: &serde_json::Value) -> Result<Vec<u8>, ScriptDataHashError> {
+pub(crate) fn encode_cost_models(json: &serde_json::Value) -> Result<Vec<u8>, ScriptDataHashError> {
     let obj = match json {
         serde_json::Value::Object(map) => map,
         serde_json::Value::Array(arr) if arr.is_empty() => {

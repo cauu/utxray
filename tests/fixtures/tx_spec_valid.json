@@ -1,5 +1,5 @@
 {
-  "inputs": [{ "utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey" }],
+  "inputs": [{ "utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey", "value": { "lovelace": 20000000 } }],
   "script_inputs": [
     {
       "utxo": "1122334411223344112233441122334411223344112233441122334411223344#1",
@@ -7,7 +7,8 @@
       "purpose": "spend",
       "datum": { "constructor": 0, "fields": [{"int": 42}] },
       "redeemer": { "constructor": 0, "fields": [] },
-      "datum_source": "inline"
+      "datum_source": "inline",
+      "value": { "lovelace": 15000000 }
     }
   ],
   "reference_inputs": [],

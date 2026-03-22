@@ -14,7 +14,10 @@ use pallas_primitives::conway::{
 };
 
 use crate::cbor::encode::json_to_plutus_data;
-use crate::tx::builder::{MintEntry, TxBuildError, TxSpec};
+use crate::cbor::script_data_hash::compute_hash_from_parts;
+use crate::tx::builder::{
+    total_input_lovelace, total_output_lovelace, MintEntry, TxBuildError, TxSpec,
+};
 use std::collections::BTreeMap;
 
 /// Protocol parameters for fee estimation (mainnet defaults).
@@ -123,7 +126,15 @@ fn build_tx_output(
 }
 
 /// Build the Conway transaction body from a TxSpec.
-fn build_transaction_body(spec: &TxSpec, fee: u64) -> Result<TransactionBody, TxBuildError> {
+///
+/// `change_lovelace`: if `Some(amount)`, a change output is appended to `change_address`.
+/// `script_data_hash`: if `Some(hash)`, it is set on the transaction body.
+fn build_transaction_body(
+    spec: &TxSpec,
+    fee: u64,
+    change_lovelace: Option<u64>,
+    script_data_hash: Option<Hash<32>>,
+) -> Result<TransactionBody, TxBuildError> {
     // Collect all inputs (pubkey + script)
     let mut inputs = Vec::new();
     for input in &spec.inputs {
@@ -148,6 +159,13 @@ fn build_transaction_body(spec: &TxSpec, fee: u64) -> Result<TransactionBody, Tx
             output.value.lovelace,
             &output.datum,
         )?);
+    }
+
+    // Append change output if we have computed change
+    if let Some(change_ada) = change_lovelace {
+        if change_ada > 0 {
+            outputs.push(build_tx_output(&spec.change_address, change_ada, &None)?);
+        }
     }
 
     // TTL (validity.to_slot)
@@ -212,7 +230,7 @@ fn build_transaction_body(spec: &TxSpec, fee: u64) -> Result<TransactionBody, Tx
         auxiliary_data_hash: None,
         validity_interval_start,
         mint,
-        script_data_hash: None,
+        script_data_hash,
         collateral,
         required_signers,
         network_id: Some(NetworkId::One), // testnet
@@ -400,37 +418,128 @@ fn has_plutus_data_shape(value: &serde_json::Value) -> bool {
     }
 }
 
+/// Compute the script_data_hash for the transaction when Plutus scripts are present.
+///
+/// Per the Cardano ledger spec, the script data hash is:
+///   blake2b_256(redeemers_cbor || datums_cbor || cost_models_cbor)
+///
+/// We encode the redeemers and datums from the witness set, and use an
+/// empty PlutusV3 cost model as default (the actual cost model should come
+/// from protocol parameters in production).
+fn compute_script_data_hash_for_tx(
+    witness_set: &WitnessSet,
+) -> Result<Option<Hash<32>>, TxBuildError> {
+    // Only compute when there are redeemers (i.e., Plutus scripts are used)
+    let redeemers = match &witness_set.redeemer {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+
+    // Encode the redeemers to CBOR
+    let redeemers_cbor = pallas_codec::minicbor::to_vec(redeemers)
+        .map_err(|e| TxBuildError::WriteError(format!("CBOR redeemer encoding failed: {e}")))?;
+
+    // Encode datums to CBOR (empty bytes if no datums, per ledger spec)
+    let datums_cbor = if let Some(ref datums) = witness_set.plutus_data {
+        pallas_codec::minicbor::to_vec(datums)
+            .map_err(|e| TxBuildError::WriteError(format!("CBOR datum encoding failed: {e}")))?
+    } else {
+        Vec::new()
+    };
+
+    // Encode cost models: use an empty PlutusV3 cost model as default.
+    // NOTE: In production, cost models should be fetched from protocol parameters.
+    // An empty map {2: []} is the minimal valid encoding for PlutusV3.
+    let cost_models_json = serde_json::json!({"PlutusV3": []});
+    let cost_models_cbor = crate::cbor::script_data_hash::encode_cost_models(&cost_models_json)
+        .map_err(|e| TxBuildError::WriteError(format!("cost model encoding failed: {e}")))?;
+
+    let hash_bytes = compute_hash_from_parts(&redeemers_cbor, &datums_cbor, &cost_models_cbor);
+    Ok(Some(Hash::from(hash_bytes)))
+}
+
 /// Build a full Conway-era Tx and encode it to CBOR bytes.
 ///
-/// Returns (cbor_bytes, fee) where fee is calculated from the tx size.
-pub fn build_cbor_tx(spec: &TxSpec) -> Result<(Vec<u8>, u64), TxBuildError> {
-    // First pass: build with a placeholder fee to calculate size
+/// Returns `(cbor_bytes, fee, warnings)` where:
+/// - `fee` is calculated from the tx size using mainnet protocol parameters
+/// - `warnings` contains any advisory messages (e.g., missing input values)
+///
+/// When all inputs have `value` fields, a change output is automatically
+/// appended to `change_address`. Otherwise, the caller must ensure balance.
+pub fn build_cbor_tx(spec: &TxSpec) -> Result<(Vec<u8>, u64, Vec<String>), TxBuildError> {
+    let mut warnings = Vec::new();
+
+    // Compute script_data_hash from the witness set
+    let witness_set_for_hash = build_witness_set(spec)?;
+    let sdh = compute_script_data_hash_for_tx(&witness_set_for_hash)?;
+
+    // Check if we can compute change
+    let can_balance = total_input_lovelace(spec).is_some();
+    if !can_balance {
+        warnings.push(
+            "input values not provided for all inputs; no change output created. \
+             Caller must ensure inputs = outputs + fee."
+                .to_string(),
+        );
+    }
+
+    // First pass: build with a placeholder fee (and no change) to estimate size
     let placeholder_fee: u64 = 200_000;
 
-    let body = build_transaction_body(spec, placeholder_fee)?;
-    let witness_set = build_witness_set(spec)?;
-
+    let body = build_transaction_body(spec, placeholder_fee, None, sdh)?;
+    let witness_set_pass1 = build_witness_set(spec)?;
     let tx: Tx = PseudoTx {
         transaction_body: body,
-        transaction_witness_set: witness_set,
+        transaction_witness_set: witness_set_pass1,
         success: true,
         auxiliary_data: Nullable::Null,
     };
 
-    // Encode first pass to get size
     let first_pass = pallas_codec::minicbor::to_vec(&tx)
         .map_err(|e| TxBuildError::WriteError(format!("CBOR encoding failed: {e}")))?;
 
-    // Calculate fee based on size
-    let fee = MIN_FEE_COEFFICIENT * (first_pass.len() as u64) + MIN_FEE_CONSTANT;
+    // Calculate fee based on size.
+    // NOTE: Fee parameters (44 lovelace/byte + 155381 constant) are current mainnet values.
+    // In production these should be fetched from protocol parameters.
+    let mut fee = MIN_FEE_COEFFICIENT * (first_pass.len() as u64) + MIN_FEE_CONSTANT;
 
-    // Second pass with calculated fee
-    let body = build_transaction_body(spec, fee)?;
-    let witness_set = build_witness_set(spec)?;
+    // If we can balance, the change output adds ~70 bytes to the tx, adjust fee estimate
+    if can_balance {
+        // A change output is roughly 70 bytes of CBOR (address + coin).
+        // Adjust fee upward to account for the change output we will add.
+        fee += MIN_FEE_COEFFICIENT * 70;
+    }
 
+    // Compute change output
+    let change_lovelace = if can_balance {
+        let total_in = total_input_lovelace(spec).ok_or_else(|| {
+            TxBuildError::InvalidSpec("unexpected: input values disappeared".to_string())
+        })?;
+        let total_out = total_output_lovelace(spec);
+        let required = total_out
+            .checked_add(fee)
+            .ok_or_else(|| TxBuildError::InvalidSpec("output + fee overflow".to_string()))?;
+        if total_in < required {
+            return Err(TxBuildError::InvalidSpec(format!(
+                "insufficient input value: inputs have {total_in} lovelace but outputs + fee require {required}"
+            )));
+        }
+        let change = total_in - required;
+        if change > 0 {
+            Some(change)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Second pass with calculated fee and change output
+    let body = build_transaction_body(spec, fee, change_lovelace, sdh)?;
+    let witness_set_pass2 = build_witness_set(spec)?;
     let tx: Tx = PseudoTx {
         transaction_body: body,
-        transaction_witness_set: witness_set,
+        transaction_witness_set: witness_set_pass2,
         success: true,
         auxiliary_data: Nullable::Null,
     };
@@ -438,7 +547,7 @@ pub fn build_cbor_tx(spec: &TxSpec) -> Result<(Vec<u8>, u64), TxBuildError> {
     let cbor_bytes = pallas_codec::minicbor::to_vec(&tx)
         .map_err(|e| TxBuildError::WriteError(format!("CBOR encoding failed: {e}")))?;
 
-    Ok((cbor_bytes, fee))
+    Ok((cbor_bytes, fee, warnings))
 }
 
 #[cfg(test)]
@@ -516,7 +625,7 @@ mod tests {
     #[test]
     fn test_build_cbor_tx_basic() -> TestResult {
         let spec = parse_tx_spec(cbor_spec_json())?;
-        let (cbor_bytes, fee) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, fee, _warnings) = build_cbor_tx(&spec)?;
 
         assert!(!cbor_bytes.is_empty());
         assert!(fee > 0);
@@ -565,7 +674,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, _fee) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, _fee, _warnings) = build_cbor_tx(&spec)?;
 
         let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
             .map_err(|e| format!("decode failed: {e}"))?;
@@ -581,7 +690,7 @@ mod tests {
     #[test]
     fn test_build_cbor_tx_roundtrip_hex() -> TestResult {
         let spec = parse_tx_spec(cbor_spec_json())?;
-        let (cbor_bytes, _fee) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, _fee, _warnings) = build_cbor_tx(&spec)?;
 
         // Hex encode then decode
         let hex_str = hex::encode(&cbor_bytes);
@@ -605,7 +714,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, fee) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, fee, _warnings) = build_cbor_tx(&spec)?;
 
         let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
             .map_err(|e| format!("decode failed: {e}"))?;
@@ -631,7 +740,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, fee) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, fee, _warnings) = build_cbor_tx(&spec)?;
 
         // Fee should be approximately: 44 * size + 155381
         let expected_approx = MIN_FEE_COEFFICIENT * (cbor_bytes.len() as u64) + MIN_FEE_CONSTANT;
@@ -643,6 +752,205 @@ mod tests {
         };
         // Should be very close (within a few hundred lovelace due to fee affecting size)
         assert!(diff < 500, "fee estimation off by {diff} lovelace");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_script_data_hash_set_when_scripts_present() -> TestResult {
+        let spec = parse_tx_spec(cbor_spec_json())?;
+        let (cbor_bytes, _fee, _warnings) = build_cbor_tx(&spec)?;
+
+        let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
+            .map_err(|e| format!("decode failed: {e}"))?;
+
+        // script_data_hash should be set because there are script inputs with redeemers
+        assert!(
+            decoded.transaction_body.script_data_hash.is_some(),
+            "script_data_hash should be set when scripts are present"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_script_data_hash_none_when_no_scripts() -> TestResult {
+        let json = r#"{
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
+            "outputs": [
+                {"address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": {"lovelace": 5000000}}
+            ],
+            "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let (cbor_bytes, _fee, _warnings) = build_cbor_tx(&spec)?;
+
+        let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
+            .map_err(|e| format!("decode failed: {e}"))?;
+
+        assert!(
+            decoded.transaction_body.script_data_hash.is_none(),
+            "script_data_hash should be None when no scripts are present"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_change_output_created_with_input_values() -> TestResult {
+        let json = r#"{
+            "inputs": [
+                {"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey", "value": {"lovelace": 20000000}}
+            ],
+            "outputs": [
+                {"address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": {"lovelace": 5000000}}
+            ],
+            "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let (cbor_bytes, fee, warnings) = build_cbor_tx(&spec)?;
+
+        // No warnings when input values are provided
+        assert!(
+            warnings.is_empty(),
+            "expected no warnings but got: {warnings:?}"
+        );
+
+        let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
+            .map_err(|e| format!("decode failed: {e}"))?;
+
+        // Should have 2 outputs: the explicit one + change
+        assert_eq!(
+            decoded.transaction_body.outputs.len(),
+            2,
+            "expected 2 outputs (1 explicit + 1 change)"
+        );
+
+        // Verify balance: input = outputs + fee
+        let total_in: u64 = 20_000_000;
+        let explicit_out: u64 = 5_000_000;
+        let change = total_in - explicit_out - fee;
+        // The second output should be the change output
+        match &decoded.transaction_body.outputs[1] {
+            PseudoTransactionOutput::PostAlonzo(o) => {
+                if let Value::Coin(coin) = o.value {
+                    assert_eq!(
+                        coin, change,
+                        "change output should be {change} but was {coin}"
+                    );
+                } else {
+                    return Err("expected Coin value for change output".into());
+                }
+            }
+            _ => return Err("expected PostAlonzo output".into()),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_change_output_without_input_values() -> TestResult {
+        // No input values => no change output, but a warning
+        let json = r#"{
+            "inputs": [{"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey"}],
+            "outputs": [
+                {"address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": {"lovelace": 5000000}}
+            ],
+            "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let (_cbor_bytes, _fee, warnings) = build_cbor_tx(&spec)?;
+
+        assert!(
+            !warnings.is_empty(),
+            "expected a warning about missing input values"
+        );
+        assert!(
+            warnings[0].contains("input values not provided"),
+            "expected warning about input values, got: {}",
+            warnings[0]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insufficient_input_value_returns_error() -> TestResult {
+        let json = r#"{
+            "inputs": [
+                {"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey", "value": {"lovelace": 100}}
+            ],
+            "outputs": [
+                {"address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": {"lovelace": 5000000}}
+            ],
+            "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let result = build_cbor_tx(&spec);
+        assert!(
+            result.is_err(),
+            "expected error for insufficient input value"
+        );
+        let err = result.err().ok_or("expected error")?.to_string();
+        assert!(
+            err.contains("insufficient input value"),
+            "expected 'insufficient input value' error, got: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_change_output_with_script_inputs_and_values() -> TestResult {
+        let json = r#"{
+            "inputs": [
+                {"utxo": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#0", "type": "pubkey", "value": {"lovelace": 10000000}}
+            ],
+            "script_inputs": [
+                {
+                    "utxo": "1122334411223344112233441122334411223344112233441122334411223344#1",
+                    "validator": "escrow.spend",
+                    "purpose": "spend",
+                    "datum": {"constructor": 0, "fields": [{"int": 42}]},
+                    "redeemer": {"constructor": 0, "fields": []},
+                    "datum_source": "inline",
+                    "value": {"lovelace": 15000000}
+                }
+            ],
+            "outputs": [
+                {"address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp", "value": {"lovelace": 5000000}}
+            ],
+            "collateral": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd#2",
+            "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp",
+            "required_signers": ["aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"]
+        }"#;
+        let spec = parse_tx_spec(json)?;
+        let (cbor_bytes, fee, warnings) = build_cbor_tx(&spec)?;
+
+        assert!(warnings.is_empty(), "expected no warnings: {warnings:?}");
+
+        let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
+            .map_err(|e| format!("decode failed: {e}"))?;
+
+        // 2 outputs: explicit + change
+        assert_eq!(decoded.transaction_body.outputs.len(), 2);
+
+        // script_data_hash should also be set
+        assert!(decoded.transaction_body.script_data_hash.is_some());
+
+        // Verify balance
+        let total_in: u64 = 25_000_000;
+        let explicit_out: u64 = 5_000_000;
+        let expected_change = total_in - explicit_out - fee;
+        match &decoded.transaction_body.outputs[1] {
+            PseudoTransactionOutput::PostAlonzo(o) => {
+                if let Value::Coin(coin) = o.value {
+                    assert_eq!(coin, expected_change);
+                } else {
+                    return Err("expected Coin value".into());
+                }
+            }
+            _ => return Err("expected PostAlonzo output".into()),
+        }
 
         Ok(())
     }

@@ -23,6 +23,10 @@ pub struct TxInput {
     pub utxo: String,
     #[serde(rename = "type")]
     pub input_type: String,
+    /// Optional value carried by this UTxO. When all inputs have values,
+    /// a change output can be computed automatically.
+    #[serde(default)]
+    pub value: Option<TxValue>,
 }
 
 /// A script input with datum, redeemer, etc.
@@ -35,6 +39,10 @@ pub struct ScriptInput {
     pub redeemer: serde_json::Value,
     #[serde(default)]
     pub datum_source: Option<String>,
+    /// Optional value carried by this UTxO. When all inputs have values,
+    /// a change output can be computed automatically.
+    #[serde(default)]
+    pub value: Option<TxValue>,
 }
 
 /// A transaction output.
@@ -213,6 +221,20 @@ pub fn total_output_lovelace(spec: &TxSpec) -> u64 {
     spec.outputs.iter().map(|o| o.value.lovelace).sum()
 }
 
+/// Calculate total input lovelace if ALL inputs have values specified.
+/// Returns `Some(total)` when every input and script_input has a value,
+/// or `None` if any input lacks a value (meaning we cannot auto-balance).
+pub fn total_input_lovelace(spec: &TxSpec) -> Option<u64> {
+    let mut total: u64 = 0;
+    for input in &spec.inputs {
+        total = total.checked_add(input.value.as_ref()?.lovelace)?;
+    }
+    for si in &spec.script_inputs {
+        total = total.checked_add(si.value.as_ref()?.lovelace)?;
+    }
+    Some(total)
+}
+
 /// Estimate fee (simplified heuristic based on tx complexity).
 /// This is only used as a fallback; the real fee is calculated from CBOR tx size
 /// by the cbor_builder module.
@@ -246,18 +268,17 @@ pub fn build_tx(
     let outputs_count = spec.outputs.len();
 
     // Build real CBOR transaction
-    let (cbor_bytes, fee) = crate::tx::cbor_builder::build_cbor_tx(spec)?;
+    let (cbor_bytes, fee, build_warnings) = crate::tx::cbor_builder::build_cbor_tx(spec)?;
     let cbor_hex = hex::encode(&cbor_bytes);
 
-    // total_input_lovelace = total_output_lovelace + fee
-    // (since we don't have real UTxO data to look up actual input values)
-    let total_input_lovelace = total_out + fee;
+    // If we have actual input values, use them; otherwise estimate as output + fee
+    let total_input_lovelace_val = total_input_lovelace(spec).unwrap_or(total_out + fee);
 
     let summary = TxBuildSummary {
         inputs_count,
         outputs_count,
         scripts_invoked,
-        total_input_lovelace,
+        total_input_lovelace: total_input_lovelace_val,
         total_output_lovelace: total_out,
         estimated_fee: fee,
     };
@@ -279,7 +300,11 @@ pub fn build_tx(
             .insert("tx_cbor".to_string(), serde_json::Value::String(cbor));
     }
 
-    Ok(Output::ok(data))
+    let mut output = Output::ok(data);
+    for w in build_warnings {
+        output = output.with_warning(crate::error::Severity::Warning, w);
+    }
+    Ok(output)
 }
 
 /// Top-level entry point: read spec file, validate, build.
