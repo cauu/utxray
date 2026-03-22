@@ -525,12 +525,8 @@ fn build_witness_set(
             "mint" => RedeemerTag::Mint,
             "withdrawal" | "withdraw" => RedeemerTag::Reward,
             "certificate" | "cert" => RedeemerTag::Cert,
-            "propose" | "vote" => {
-                return Err(TxBuildError::InvalidSpec(format!(
-                    "purpose '{}' requires Conway governance support (not yet available in pallas 0.30)",
-                    si.purpose
-                )));
-            }
+            "vote" => RedeemerTag::Vote,
+            "propose" => RedeemerTag::Propose,
             _ => {
                 return Err(TxBuildError::InvalidSpec(format!(
                     "unknown purpose '{}'; expected one of: spend, mint, withdrawal, certificate, propose, vote (aliases: withdraw, cert)",
@@ -764,6 +760,8 @@ pub fn parse_exec_units_file(path: &str) -> Result<ExecUnitsMap, TxBuildError> {
             "mint" => RedeemerTag::Mint,
             "cert" | "certificate" => RedeemerTag::Cert,
             "reward" | "withdrawal" | "withdraw" => RedeemerTag::Reward,
+            "vote" => RedeemerTag::Vote,
+            "propose" => RedeemerTag::Propose,
             _ => {
                 return Err(TxBuildError::InvalidSpec(format!(
                     "unknown redeemer tag in exec-units: {tag_str}"

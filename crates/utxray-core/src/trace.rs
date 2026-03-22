@@ -309,6 +309,12 @@ fn build_minimal_script_context(
         "certificate" => serde_json::json!({
             "Publish": 0
         }),
+        "propose" => serde_json::json!({
+            "Propose": 0
+        }),
+        "vote" => serde_json::json!({
+            "Vote": validator_hash
+        }),
         _ => serde_json::json!(null),
     };
 
@@ -375,6 +381,17 @@ fn build_minimal_script_context(
                 "certificate": null
             }
         }),
+        "propose" => serde_json::json!({
+            "Propose": {
+                "index": 0,
+                "proposal_procedure": null
+            }
+        }),
+        "vote" => serde_json::json!({
+            "Vote": {
+                "voter": validator_hash
+            }
+        }),
         _ => serde_json::json!(null),
     };
 
@@ -402,15 +419,8 @@ pub async fn run_trace(
         return Ok(output);
     }
 
-    // Normalize purpose alias and check Conway governance support
+    // Normalize purpose alias
     let normalized_purpose = normalize_purpose(&config.purpose).to_string();
-    if normalized_purpose == "propose" || normalized_purpose == "vote" {
-        let output = Output::error(serde_json::json!({
-            "error_code": "NOT_IMPLEMENTED",
-            "message": format!("purpose '{}' requires Conway governance support (not yet available in pallas 0.30)", normalized_purpose)
-        }));
-        return Ok(output);
-    }
 
     // Validate redeemer is valid JSON
     if config.redeemer.is_empty() {

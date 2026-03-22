@@ -36,7 +36,7 @@ FORBIDDEN_OK=true
 
 # ─── Gate: zero NOT_IMPLEMENTED ───
 
-NOT_IMPL_COUNT=$(grep -rn 'NOT_IMPLEMENTED' crates/utxray-cli/src/ 2>/dev/null | grep -v test | wc -l | tr -d ' ')
+NOT_IMPL_COUNT=$(grep -rn 'NOT_IMPLEMENTED' crates/ 2>/dev/null | grep -v test | grep -v '#\[cfg(test)\]' | wc -l | tr -d ' ')
 NOT_IMPL_OK=true
 [ "$NOT_IMPL_COUNT" -gt 0 ] && NOT_IMPL_OK=false
 
