@@ -865,10 +865,15 @@ pub fn build_cbor_tx(
     // In production these should be fetched from protocol parameters.
     let mut fee = MIN_FEE_COEFFICIENT * (first_pass.len() as u64) + MIN_FEE_CONSTANT;
 
+    // Account for witness overhead: each VKeyWitness adds ~102 bytes
+    // (32 vkey + 64 signature + CBOR tags/lengths).
+    // At minimum 1 signature is needed; required_signers may add more.
+    let num_signers = std::cmp::max(1, spec.required_signers.len() as u64);
+    let witness_overhead = num_signers * 102;
+    fee += MIN_FEE_COEFFICIENT * witness_overhead;
+
     // If we can balance, the change output adds ~70 bytes to the tx, adjust fee estimate
     if can_balance {
-        // A change output is roughly 70 bytes of CBOR (address + coin).
-        // Adjust fee upward to account for the change output we will add.
         fee += MIN_FEE_COEFFICIENT * 70;
     }
 
@@ -1139,15 +1144,16 @@ mod tests {
         let spec = parse_tx_spec(json)?;
         let (cbor_bytes, fee, _warnings) = build_cbor_tx_test(&spec)?;
 
-        // Fee should be approximately: 44 * size + 155381
-        let expected_approx = MIN_FEE_COEFFICIENT * (cbor_bytes.len() as u64) + MIN_FEE_CONSTANT;
-        // Allow some variance since the fee itself affects size
+        // Fee should be approximately: 44 * (size + witness_overhead) + 155381
+        // Witness overhead: at least 1 signer × 102 bytes
+        let witness_bytes = 102_u64;
+        let expected_approx =
+            MIN_FEE_COEFFICIENT * (cbor_bytes.len() as u64 + witness_bytes) + MIN_FEE_CONSTANT;
         let diff = if fee > expected_approx {
             fee - expected_approx
         } else {
             expected_approx - fee
         };
-        // Should be very close (within a few hundred lovelace due to fee affecting size)
         assert!(diff < 500, "fee estimation off by {diff} lovelace");
 
         Ok(())
