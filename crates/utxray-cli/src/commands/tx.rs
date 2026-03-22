@@ -6,6 +6,8 @@ use utxray_core::backend::blockfrost::BlockfrostBackend;
 use utxray_core::backend::EvaluatedRedeemer;
 use utxray_core::output::{print_output, Output};
 use utxray_core::tx::builder;
+use utxray_core::tx::signer;
+use utxray_core::tx::submitter;
 
 #[derive(Subcommand, Debug)]
 pub enum TxCommands {
@@ -32,6 +34,8 @@ pub enum TxCommands {
         tx: Option<String>,
         #[arg(long)]
         signing_key: Option<String>,
+        #[arg(long)]
+        out: Option<String>,
     },
     /// Submit a transaction
     Submit {
@@ -48,6 +52,12 @@ struct TxEvaluateOutput {
     phase1_checked: bool,
     budget_source: String,
     redeemers: Vec<EvaluatedRedeemer>,
+}
+
+#[derive(Debug, Serialize)]
+struct TxSignOutput {
+    is_signed: bool,
+    tx_file: String,
 }
 
 fn get_blockfrost(ctx: &AppContext) -> anyhow::Result<BlockfrostBackend> {
@@ -162,11 +172,160 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
         TxCommands::Simulate { .. } => {
             anyhow::bail!("command 'tx simulate' not yet implemented")
         }
-        TxCommands::Sign { .. } => {
-            anyhow::bail!("command 'tx sign' not yet implemented")
+        TxCommands::Sign {
+            tx,
+            signing_key,
+            out,
+        } => {
+            let tx_arg = match tx {
+                Some(t) => t,
+                None => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "MISSING_ARGUMENT",
+                        "message": "--tx <cbor_hex_or_file> is required"
+                    }));
+                    print_output(&output)?;
+                    return Ok(());
+                }
+            };
+
+            let skey_path = match signing_key {
+                Some(s) => s,
+                None => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "MISSING_ARGUMENT",
+                        "message": "--signing-key <skey-file> is required"
+                    }));
+                    print_output(&output)?;
+                    return Ok(());
+                }
+            };
+
+            let cbor_hex = match read_tx_cbor(&tx_arg).await {
+                Ok(h) => h,
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "TX_READ_FAILED",
+                        "message": e.to_string()
+                    }));
+                    print_output(&output)?;
+                    return Ok(());
+                }
+            };
+
+            let tx_bytes = match hex::decode(&cbor_hex) {
+                Ok(b) => b,
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "INVALID_HEX",
+                        "message": format!("invalid transaction hex: {e}")
+                    }));
+                    print_output(&output)?;
+                    return Ok(());
+                }
+            };
+
+            let signed_bytes = match signer::sign_transaction(&tx_bytes, &skey_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "SIGN_FAILED",
+                        "message": e.to_string()
+                    }));
+                    print_output(&output)?;
+                    return Ok(());
+                }
+            };
+
+            let signed_hex = hex::encode(&signed_bytes);
+            let out_path = out.unwrap_or_else(|| "./tx.signed".to_string());
+
+            if let Err(e) = tokio::fs::write(&out_path, &signed_hex).await {
+                let output = Output::error(serde_json::json!({
+                    "error_code": "WRITE_FAILED",
+                    "message": format!("failed to write signed tx to '{}': {}", out_path, e)
+                }));
+                print_output(&output)?;
+                return Ok(());
+            }
+
+            let output = Output::ok(TxSignOutput {
+                is_signed: true,
+                tx_file: out_path,
+            });
+            print_output(&output)?;
+            Ok(())
         }
-        TxCommands::Submit { .. } => {
-            anyhow::bail!("command 'tx submit' not yet implemented")
+        TxCommands::Submit { tx, allow_mainnet } => {
+            let tx_arg = match tx {
+                Some(t) => t,
+                None => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "MISSING_ARGUMENT",
+                        "message": "--tx <cbor_hex_or_file> is required"
+                    }));
+                    print_output(&output)?;
+                    return Ok(());
+                }
+            };
+
+            // Mainnet safety check before even reading the backend config
+            if ctx.network == "mainnet" && !allow_mainnet {
+                let output = Output::error(serde_json::json!({
+                    "error_code": "MAINNET_SAFETY_BLOCK",
+                    "severity": "critical",
+                    "message": "Refusing to submit to mainnet without --allow-mainnet flag."
+                }));
+                print_output(&output)?;
+                return Ok(());
+            }
+
+            let backend = match get_blockfrost(ctx) {
+                Ok(b) => b,
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "BACKEND_NOT_CONFIGURED",
+                        "message": e.to_string()
+                    }));
+                    print_output(&output)?;
+                    return Ok(());
+                }
+            };
+
+            let cbor_hex = match read_tx_cbor(&tx_arg).await {
+                Ok(h) => h,
+                Err(e) => {
+                    let output = Output::error(serde_json::json!({
+                        "error_code": "TX_READ_FAILED",
+                        "message": e.to_string()
+                    }));
+                    print_output(&output)?;
+                    return Ok(());
+                }
+            };
+
+            match submitter::submit_transaction(&cbor_hex, &ctx.network, allow_mainnet, &backend)
+                .await
+            {
+                Ok(output) => {
+                    print_output(&output)?;
+                }
+                Err(e) => {
+                    let (error_code, severity) = match &e {
+                        submitter::SubmitError::MainnetSafetyBlock => {
+                            ("MAINNET_SAFETY_BLOCK", "critical")
+                        }
+                        _ => ("SUBMIT_FAILED", "error"),
+                    };
+                    let output = Output::error(serde_json::json!({
+                        "error_code": error_code,
+                        "severity": severity,
+                        "message": e.to_string()
+                    }));
+                    print_output(&output)?;
+                }
+            }
+            Ok(())
         }
     }
 }
