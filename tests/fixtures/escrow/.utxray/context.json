@@ -1,0 +1,21 @@
+{
+  "validators": [
+    {
+      "name": "escrow.escrow.spend",
+      "purpose": "spend",
+      "hash": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+      "test_status": "unknown"
+    },
+    {
+      "name": "escrow.token.mint",
+      "purpose": "mint",
+      "hash": "11223344112233441122334411223344112233441122334411223344",
+      "test_status": "unknown"
+    }
+  ],
+  "project": {
+    "name": "test/escrow",
+    "version": "0.0.1"
+  },
+  "generated_at": "2026-03-22T13:58:58.779701+00:00"
+}

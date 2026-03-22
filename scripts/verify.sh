@@ -34,6 +34,46 @@ STD_PROC_COUNT=$(grep -rn 'std::process::Command' crates/ 2>/dev/null | wc -l | 
 FORBIDDEN_OK=true
 [ "$UNWRAP_COUNT" -gt 0 ] || [ "$STD_PROC_COUNT" -gt 0 ] && FORBIDDEN_OK=false
 
+# ─── Gate: zero NOT_IMPLEMENTED ───
+
+NOT_IMPL_COUNT=$(grep -rn 'NOT_IMPLEMENTED' crates/utxray-cli/src/ 2>/dev/null | grep -v test | wc -l | tr -d ' ')
+NOT_IMPL_OK=true
+[ "$NOT_IMPL_COUNT" -gt 0 ] && NOT_IMPL_OK=false
+
+# ─── Gate: command coverage ───
+
+MANIFEST_TOTAL=35
+STUB_COUNT=$(grep -rc 'NOT_IMPLEMENTED\|not yet implemented' crates/utxray-cli/src/commands/*.rs 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
+IMPL_COUNT=$((MANIFEST_TOTAL - STUB_COUNT - 1)) # -1 for deferred test-watch
+COVERAGE_OK=true
+[ "$STUB_COUNT" -gt 0 ] && COVERAGE_OK=false
+
+# ─── Gate: E2E smoke tests ───
+
+ENV_OK=true
+cargo run -q -- env 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1 || ENV_OK=false
+
+TX_BUILD_OK=true
+if [ -f "tests/fixtures/tx_spec_valid.json" ]; then
+  cargo run -q -- tx build --spec tests/fixtures/tx_spec_valid.json 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1 || TX_BUILD_OK=false
+fi
+
+SCHEMA_OK=true
+if [ -d "tests/fixtures/escrow" ]; then
+  cargo run -q -- --project tests/fixtures/escrow schema validate --validator escrow.escrow.spend --purpose spend --redeemer '{"constructor":0,"fields":[]}' 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1 || SCHEMA_OK=false
+fi
+
+# ─── Gate: docs exist and non-empty ───
+
+DOCS_OK=true
+DOCS_MISSING=""
+for doc in docs/coverage-matrix.md docs/verification-report.md docs/spec-gaps.md docs/deviations.md docs/command-manifest.md; do
+  if [ ! -s "$doc" ]; then
+    DOCS_OK=false
+    DOCS_MISSING="$DOCS_MISSING $doc"
+  fi
+done
+
 # ─── Phase-specific ───
 
 PHASE_CHECKS=""
@@ -98,11 +138,72 @@ if [ "$PHASE" -eq 1 ]; then
     PHASE_OK=false
   fi
 
-  # Minimum test count (12 commands × at least 1 test each)
+  # Minimum test count (12 commands x at least 1 test each)
   if [ "$TEST_PASSED" -ge 12 ]; then
     PHASE_CHECKS="$PHASE_CHECKS\"min_test_count\": true"
   else
     PHASE_CHECKS="$PHASE_CHECKS\"min_test_count\": false"
+    PHASE_OK=false
+  fi
+fi
+
+if [ "$PHASE" -ge 2 ]; then
+  # Chain commands have tests
+  CHAIN_TEST_COUNT=$(ls crates/utxray-cli/tests/cli_utxo_diff_test.rs crates/utxray-cli/tests/cli_tx_simulate_test.rs 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$CHAIN_TEST_COUNT" -ge 2 ]; then
+    PHASE_CHECKS="$PHASE_CHECKS\"chain_tests_exist\": true, "
+  else
+    PHASE_CHECKS="$PHASE_CHECKS\"chain_tests_exist\": false, "
+    PHASE_OK=false
+  fi
+
+  # All docs present
+  if [ "$DOCS_OK" = "true" ]; then
+    PHASE_CHECKS="$PHASE_CHECKS\"docs_complete\": true, "
+  else
+    PHASE_CHECKS="$PHASE_CHECKS\"docs_complete\": false, "
+    PHASE_OK=false
+  fi
+
+  # Zero NOT_IMPLEMENTED
+  if [ "$NOT_IMPL_OK" = "true" ]; then
+    PHASE_CHECKS="$PHASE_CHECKS\"zero_not_impl\": true, "
+  else
+    PHASE_CHECKS="$PHASE_CHECKS\"zero_not_impl\": false, "
+    PHASE_OK=false
+  fi
+
+  # E2E: env works
+  if [ "$ENV_OK" = "true" ]; then
+    PHASE_CHECKS="$PHASE_CHECKS\"e2e_env\": true"
+  else
+    PHASE_CHECKS="$PHASE_CHECKS\"e2e_env\": false"
+    PHASE_OK=false
+  fi
+fi
+
+if [ "$PHASE" -ge 3 ]; then
+  # Full command coverage
+  if [ "$COVERAGE_OK" = "true" ]; then
+    PHASE_CHECKS="$PHASE_CHECKS, \"full_coverage\": true, "
+  else
+    PHASE_CHECKS="$PHASE_CHECKS, \"full_coverage\": false, "
+    PHASE_OK=false
+  fi
+
+  # E2E: tx build works
+  if [ "$TX_BUILD_OK" = "true" ]; then
+    PHASE_CHECKS="$PHASE_CHECKS\"e2e_tx_build\": true, "
+  else
+    PHASE_CHECKS="$PHASE_CHECKS\"e2e_tx_build\": false, "
+    PHASE_OK=false
+  fi
+
+  # E2E: schema validate works
+  if [ "$SCHEMA_OK" = "true" ]; then
+    PHASE_CHECKS="$PHASE_CHECKS\"e2e_schema_validate\": true"
+  else
+    PHASE_CHECKS="$PHASE_CHECKS\"e2e_schema_validate\": false"
     PHASE_OK=false
   fi
 fi
@@ -134,6 +235,19 @@ cat > "$RESULT_FILE" << ENDJSON
     "no_forbidden_patterns": $FORBIDDEN_OK,
     "unwrap_count": $UNWRAP_COUNT,
     "std_process_count": $STD_PROC_COUNT
+  },
+  "v2_gates": {
+    "not_implemented_count": $NOT_IMPL_COUNT,
+    "zero_not_impl": $NOT_IMPL_OK,
+    "manifest_total": $MANIFEST_TOTAL,
+    "stub_count": $STUB_COUNT,
+    "impl_count": $IMPL_COUNT,
+    "coverage_ok": $COVERAGE_OK,
+    "e2e_env": $ENV_OK,
+    "e2e_tx_build": $TX_BUILD_OK,
+    "e2e_schema_validate": $SCHEMA_OK,
+    "docs_present": $DOCS_OK,
+    "docs_missing": "$(echo $DOCS_MISSING | xargs)"
   },
   "test_summary": {
     "total": $TEST_TOTAL,

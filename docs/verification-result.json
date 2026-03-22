@@ -10,9 +10,22 @@
     "unwrap_count": 0,
     "std_process_count": 0
   },
+  "v2_gates": {
+    "not_implemented_count": 0,
+    "zero_not_impl": true,
+    "manifest_total": 35,
+    "stub_count": 0,
+    "impl_count": 34,
+    "coverage_ok": true,
+    "e2e_env": true,
+    "e2e_tx_build": true,
+    "e2e_schema_validate": true,
+    "docs_present": true,
+    "docs_missing": ""
+  },
   "test_summary": {
-    "total": 250,
-    "passed": 242,
+    "total": 400,
+    "passed": 392,
     "failed": 8
   },
   "phase_checks": { "fixtures_exist": true, "coverage_updated": true, "report_updated": true, "min_test_count": true },
