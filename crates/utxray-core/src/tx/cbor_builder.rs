@@ -40,23 +40,22 @@ fn parse_utxo_ref(utxo: &str) -> Result<TransactionInput, TxBuildError> {
     let tx_hash_hex = parts[0];
     let index_str = parts[1];
 
-    // Pad or validate the tx hash - must be 32 bytes (64 hex chars)
+    // Validate the tx hash - must be exactly 32 bytes (64 hex chars)
+    if tx_hash_hex.len() != 64 {
+        return Err(TxBuildError::InvalidSpec(format!(
+            "tx hash must be exactly 64 hex chars (32 bytes), got {} chars in UTxO ref '{utxo}'",
+            tx_hash_hex.len()
+        )));
+    }
+
     let hash_bytes = hex::decode(tx_hash_hex).map_err(|e| {
         TxBuildError::InvalidSpec(format!("invalid tx hash hex in UTxO ref '{utxo}': {e}"))
     })?;
 
-    let hash: Hash<32> =
-        if hash_bytes.len() == 32 {
-            Hash::from(<[u8; 32]>::try_from(hash_bytes.as_slice()).map_err(|_| {
-                TxBuildError::InvalidSpec(format!("tx hash must be 32 bytes: {utxo}"))
-            })?)
-        } else {
-            // Pad short hashes with zeros (for testing with short hex strings)
-            let mut padded = [0u8; 32];
-            let copy_len = hash_bytes.len().min(32);
-            padded[..copy_len].copy_from_slice(&hash_bytes[..copy_len]);
-            Hash::from(padded)
-        };
+    let hash: Hash<32> = Hash::from(
+        <[u8; 32]>::try_from(hash_bytes.as_slice())
+            .map_err(|_| TxBuildError::InvalidSpec(format!("tx hash must be 32 bytes: {utxo}")))?,
+    );
 
     let index: u64 = index_str
         .parse()
@@ -69,7 +68,7 @@ fn parse_utxo_ref(utxo: &str) -> Result<TransactionInput, TxBuildError> {
 }
 
 /// Decode a bech32 Cardano address into raw bytes.
-/// Falls back to hex decoding if bech32 fails (for testing with short addresses).
+/// Only accepts valid bech32 (addr_test1..., addr1...) or valid hex-encoded addresses.
 fn decode_address(addr_str: &str) -> Result<Bytes, TxBuildError> {
     // Try bech32 first
     if let Ok(addr) = Address::from_bech32(addr_str) {
@@ -78,31 +77,31 @@ fn decode_address(addr_str: &str) -> Result<Bytes, TxBuildError> {
 
     // Try hex decoding
     if let Ok(bytes) = hex::decode(addr_str) {
-        return Ok(Bytes::from(bytes));
+        if !bytes.is_empty() {
+            return Ok(Bytes::from(bytes));
+        }
     }
 
-    // Fallback: encode the address string as raw bytes for testing
-    // This allows tests with short placeholder addresses like "addr_test1qz123"
-    // to still produce valid CBOR structure even if the address isn't real.
-    Ok(Bytes::from(addr_str.as_bytes().to_vec()))
+    Err(TxBuildError::InvalidSpec(format!(
+        "invalid address '{addr_str}': must be a valid bech32 address (addr_test1.../addr1...) or hex-encoded address"
+    )))
 }
 
 /// Parse a hex-encoded key hash (28 bytes) for required signers.
 fn parse_keyhash_28(hex_str: &str) -> Result<Hash<28>, TxBuildError> {
+    if hex_str.len() != 56 {
+        return Err(TxBuildError::InvalidSpec(format!(
+            "signer hash must be exactly 56 hex chars (28 bytes), got {} chars: '{hex_str}'",
+            hex_str.len()
+        )));
+    }
+
     let bytes = hex::decode(hex_str)
         .map_err(|e| TxBuildError::InvalidSpec(format!("invalid key hash hex '{hex_str}': {e}")))?;
 
-    if bytes.len() == 28 {
-        Ok(Hash::from(<[u8; 28]>::try_from(bytes.as_slice()).map_err(
-            |_| TxBuildError::InvalidSpec(format!("key hash must be 28 bytes: {hex_str}")),
-        )?))
-    } else {
-        // Pad short hashes for testing
-        let mut padded = [0u8; 28];
-        let copy_len = bytes.len().min(28);
-        padded[..copy_len].copy_from_slice(&bytes[..copy_len]);
-        Ok(Hash::from(padded))
-    }
+    Ok(Hash::from(<[u8; 28]>::try_from(bytes.as_slice()).map_err(
+        |_| TxBuildError::InvalidSpec(format!("key hash must be 28 bytes: {hex_str}")),
+    )?))
 }
 
 /// Build a Conway-era transaction output.
@@ -125,15 +124,27 @@ fn build_tx_output(
     ))
 }
 
+/// Map a network name string to a Cardano NetworkId.
+/// "mainnet" maps to NetworkId::Two, everything else to NetworkId::One.
+fn network_id_from_str(network: &str) -> NetworkId {
+    if network == "mainnet" {
+        NetworkId::Two
+    } else {
+        NetworkId::One
+    }
+}
+
 /// Build the Conway transaction body from a TxSpec.
 ///
 /// `change_lovelace`: if `Some(amount)`, a change output is appended to `change_address`.
 /// `script_data_hash`: if `Some(hash)`, it is set on the transaction body.
+/// `network`: the target network name (e.g., "mainnet", "preview", "preprod").
 fn build_transaction_body(
     spec: &TxSpec,
     fee: u64,
     change_lovelace: Option<u64>,
     script_data_hash: Option<Hash<32>>,
+    network: &str,
 ) -> Result<TransactionBody, TxBuildError> {
     // Collect all inputs (pubkey + script)
     let mut inputs = Vec::new();
@@ -233,7 +244,7 @@ fn build_transaction_body(
         script_data_hash,
         collateral,
         required_signers,
-        network_id: Some(NetworkId::One), // testnet
+        network_id: Some(network_id_from_str(network)),
         collateral_return: None,
         total_collateral: None,
         reference_inputs,
@@ -304,14 +315,30 @@ fn build_mint(spec: &TxSpec) -> Result<Option<pallas_primitives::conway::Mint>, 
 }
 
 /// Build the witness set with redeemers and plutus data.
-fn build_witness_set(spec: &TxSpec) -> Result<WitnessSet, TxBuildError> {
+///
+/// `exec_units_map`: optional map from (tag, index) to (cpu, mem) for real ExUnits.
+fn build_witness_set(
+    spec: &TxSpec,
+    exec_units_map: Option<&ExecUnitsMap>,
+) -> Result<WitnessSet, TxBuildError> {
     let mut redeemer_entries = Vec::new();
     let mut plutus_data_list = Vec::new();
 
-    // Redeemers from script inputs (purpose: spend)
-    // The index for spend redeemers corresponds to the position of the input
-    // in the sorted inputs list. For simplicity, we assign indices sequentially
-    // based on script_inputs order.
+    // Build the sorted list of ALL inputs for correct redeemer indexing.
+    // Redeemer index for spend must be the position of the script input
+    // in the sorted (all inputs) list.
+    let mut all_inputs: Vec<(Vec<u8>, u64)> = Vec::new();
+    for input in &spec.inputs {
+        let parsed = parse_utxo_ref(&input.utxo)?;
+        all_inputs.push((parsed.transaction_id.as_ref().to_vec(), parsed.index));
+    }
+    for si in &spec.script_inputs {
+        let parsed = parse_utxo_ref(&si.utxo)?;
+        all_inputs.push((parsed.transaction_id.as_ref().to_vec(), parsed.index));
+    }
+    all_inputs.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    // Redeemers from script inputs
     for (i, si) in spec.script_inputs.iter().enumerate() {
         let redeemer_data = json_to_plutus_data(&si.redeemer).map_err(|e| {
             TxBuildError::InvalidSpec(format!("invalid redeemer for script_input[{i}]: {e}"))
@@ -322,20 +349,46 @@ fn build_witness_set(spec: &TxSpec) -> Result<WitnessSet, TxBuildError> {
             "mint" => RedeemerTag::Mint,
             "cert" => RedeemerTag::Cert,
             "reward" => RedeemerTag::Reward,
-            _ => RedeemerTag::Spend,
+            _ => {
+                return Err(TxBuildError::InvalidSpec(format!(
+                    "unknown purpose: {}",
+                    si.purpose
+                )));
+            }
         };
+
+        // For spend redeemers, the index is the position in the sorted inputs list
+        let redeemer_index = if tag == RedeemerTag::Spend {
+            let parsed = parse_utxo_ref(&si.utxo)?;
+            let needle = (parsed.transaction_id.as_ref().to_vec(), parsed.index);
+            all_inputs
+                .iter()
+                .position(|x| x == &needle)
+                .ok_or_else(|| {
+                    TxBuildError::InvalidSpec(format!(
+                        "script_input[{i}] utxo not found in sorted inputs list"
+                    ))
+                })? as u32
+        } else {
+            i as u32
+        };
+
+        // Look up exec units from the map, or use defaults
+        let ex_units = exec_units_map
+            .and_then(|m| m.get(&tag, redeemer_index))
+            .unwrap_or(ExUnits {
+                mem: DEFAULT_EX_UNITS_MEM,
+                steps: DEFAULT_EX_UNITS_STEPS,
+            });
 
         redeemer_entries.push((
             RedeemersKey {
                 tag,
-                index: i as u32,
+                index: redeemer_index,
             },
             RedeemersValue {
                 data: redeemer_data,
-                ex_units: ExUnits {
-                    mem: DEFAULT_EX_UNITS_MEM,
-                    steps: DEFAULT_EX_UNITS_STEPS,
-                },
+                ex_units,
             },
         ));
 
@@ -359,17 +412,22 @@ fn build_witness_set(spec: &TxSpec) -> Result<WitnessSet, TxBuildError> {
                 TxBuildError::InvalidSpec(format!("invalid redeemer for mint policy: {e}"))
             })?;
 
+            let mint_index = i as u32;
+            let ex_units = exec_units_map
+                .and_then(|m| m.get(&RedeemerTag::Mint, mint_index))
+                .unwrap_or(ExUnits {
+                    mem: DEFAULT_EX_UNITS_MEM,
+                    steps: DEFAULT_EX_UNITS_STEPS,
+                });
+
             redeemer_entries.push((
                 RedeemersKey {
                     tag: RedeemerTag::Mint,
-                    index: i as u32,
+                    index: mint_index,
                 },
                 RedeemersValue {
                     data: redeemer_data,
-                    ex_units: ExUnits {
-                        mem: DEFAULT_EX_UNITS_MEM,
-                        steps: DEFAULT_EX_UNITS_STEPS,
-                    },
+                    ex_units,
                 },
             ));
         }
@@ -423,16 +481,32 @@ fn has_plutus_data_shape(value: &serde_json::Value) -> bool {
 /// Per the Cardano ledger spec, the script data hash is:
 ///   blake2b_256(redeemers_cbor || datums_cbor || cost_models_cbor)
 ///
-/// We encode the redeemers and datums from the witness set, and use an
-/// empty PlutusV3 cost model as default (the actual cost model should come
-/// from protocol parameters in production).
+/// Returns `(Option<Hash>, Vec<String>)` — the hash (if computable) and any warnings.
+/// When cost models are not available, returns None for the hash and a warning.
 fn compute_script_data_hash_for_tx(
     witness_set: &WitnessSet,
-) -> Result<Option<Hash<32>>, TxBuildError> {
+    cost_models: Option<&serde_json::Value>,
+) -> Result<(Option<Hash<32>>, Vec<String>), TxBuildError> {
+    let mut warnings = Vec::new();
+
     // Only compute when there are redeemers (i.e., Plutus scripts are used)
     let redeemers = match &witness_set.redeemer {
         Some(r) => r,
-        None => return Ok(None),
+        None => return Ok((None, warnings)),
+    };
+
+    // If there are Plutus scripts but no cost model, skip script_data_hash
+    let cost_models_json = match cost_models {
+        Some(cm) => cm.clone(),
+        None => {
+            warnings.push(
+                "script_data_hash not computed: cost model not available. \
+                 Run 'utxray context params' to fetch protocol parameters, \
+                 or provide --exec-units with cost model data."
+                    .to_string(),
+            );
+            return Ok((None, warnings));
+        }
     };
 
     // Encode the redeemers to CBOR
@@ -447,15 +521,96 @@ fn compute_script_data_hash_for_tx(
         Vec::new()
     };
 
-    // Encode cost models: use an empty PlutusV3 cost model as default.
-    // NOTE: In production, cost models should be fetched from protocol parameters.
-    // An empty map {2: []} is the minimal valid encoding for PlutusV3.
-    let cost_models_json = serde_json::json!({"PlutusV3": []});
     let cost_models_cbor = crate::cbor::script_data_hash::encode_cost_models(&cost_models_json)
         .map_err(|e| TxBuildError::WriteError(format!("cost model encoding failed: {e}")))?;
 
     let hash_bytes = compute_hash_from_parts(&redeemers_cbor, &datums_cbor, &cost_models_cbor);
-    Ok(Some(Hash::from(hash_bytes)))
+    Ok((Some(Hash::from(hash_bytes)), warnings))
+}
+
+/// A map from (redeemer_tag, index) to ExUnits (cpu, mem).
+/// Used to apply real execution units from `tx evaluate` output.
+#[derive(Debug, Default)]
+pub struct ExecUnitsMap {
+    entries: Vec<(RedeemerTag, u32, ExUnits)>,
+}
+
+impl ExecUnitsMap {
+    /// Look up ExUnits for a given (tag, index).
+    fn get(&self, tag: &RedeemerTag, index: u32) -> Option<ExUnits> {
+        self.entries
+            .iter()
+            .find(|(t, i, _)| t == tag && *i == index)
+            .map(|(_, _, eu)| *eu)
+    }
+}
+
+/// Parse an exec-units JSON file (output from `tx evaluate`) into an ExecUnitsMap.
+///
+/// Expected format:
+/// ```json
+/// {
+///   "v": "0.1.0", "status": "ok",
+///   "redeemers": [
+///     {"tag": "spend", "index": 0, "exec_units": {"cpu": 1050000, "mem": 30200}}
+///   ]
+/// }
+/// ```
+pub fn parse_exec_units_file(path: &str) -> Result<ExecUnitsMap, TxBuildError> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| TxBuildError::ReadError(format!("exec-units file '{path}': {e}")))?;
+
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| TxBuildError::InvalidSpec(format!("invalid exec-units JSON: {e}")))?;
+
+    let redeemers = json
+        .get("redeemers")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            TxBuildError::InvalidSpec("exec-units file missing 'redeemers' array".to_string())
+        })?;
+
+    let mut map = ExecUnitsMap::default();
+
+    for entry in redeemers {
+        let tag_str = entry.get("tag").and_then(|v| v.as_str()).ok_or_else(|| {
+            TxBuildError::InvalidSpec("exec-units redeemer missing 'tag'".to_string())
+        })?;
+
+        let tag = match tag_str {
+            "spend" => RedeemerTag::Spend,
+            "mint" => RedeemerTag::Mint,
+            "cert" => RedeemerTag::Cert,
+            "reward" => RedeemerTag::Reward,
+            _ => {
+                return Err(TxBuildError::InvalidSpec(format!(
+                    "unknown redeemer tag in exec-units: {tag_str}"
+                )));
+            }
+        };
+
+        let index = entry.get("index").and_then(|v| v.as_u64()).ok_or_else(|| {
+            TxBuildError::InvalidSpec("exec-units redeemer missing 'index'".to_string())
+        })? as u32;
+
+        let eu = entry.get("exec_units").ok_or_else(|| {
+            TxBuildError::InvalidSpec("exec-units redeemer missing 'exec_units'".to_string())
+        })?;
+
+        let cpu = eu
+            .get("cpu")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| TxBuildError::InvalidSpec("exec-units missing 'cpu'".to_string()))?;
+
+        let mem = eu
+            .get("mem")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| TxBuildError::InvalidSpec("exec-units missing 'mem'".to_string()))?;
+
+        map.entries.push((tag, index, ExUnits { mem, steps: cpu }));
+    }
+
+    Ok(map)
 }
 
 /// Build a full Conway-era Tx and encode it to CBOR bytes.
@@ -464,14 +619,26 @@ fn compute_script_data_hash_for_tx(
 /// - `fee` is calculated from the tx size using mainnet protocol parameters
 /// - `warnings` contains any advisory messages (e.g., missing input values)
 ///
+/// Parameters:
+/// - `spec`: the transaction specification
+/// - `network`: target network name ("mainnet", "preview", "preprod", etc.)
+/// - `exec_units`: optional exec units from `tx evaluate`
+/// - `cost_models`: optional cost models JSON from protocol parameters
+///
 /// When all inputs have `value` fields, a change output is automatically
 /// appended to `change_address`. Otherwise, the caller must ensure balance.
-pub fn build_cbor_tx(spec: &TxSpec) -> Result<(Vec<u8>, u64, Vec<String>), TxBuildError> {
+pub fn build_cbor_tx(
+    spec: &TxSpec,
+    network: &str,
+    exec_units: Option<&ExecUnitsMap>,
+    cost_models: Option<&serde_json::Value>,
+) -> Result<(Vec<u8>, u64, Vec<String>), TxBuildError> {
     let mut warnings = Vec::new();
 
     // Compute script_data_hash from the witness set
-    let witness_set_for_hash = build_witness_set(spec)?;
-    let sdh = compute_script_data_hash_for_tx(&witness_set_for_hash)?;
+    let witness_set_for_hash = build_witness_set(spec, exec_units)?;
+    let (sdh, sdh_warnings) = compute_script_data_hash_for_tx(&witness_set_for_hash, cost_models)?;
+    warnings.extend(sdh_warnings);
 
     // Check if we can compute change
     let can_balance = total_input_lovelace(spec).is_some();
@@ -486,8 +653,8 @@ pub fn build_cbor_tx(spec: &TxSpec) -> Result<(Vec<u8>, u64, Vec<String>), TxBui
     // First pass: build with a placeholder fee (and no change) to estimate size
     let placeholder_fee: u64 = 200_000;
 
-    let body = build_transaction_body(spec, placeholder_fee, None, sdh)?;
-    let witness_set_pass1 = build_witness_set(spec)?;
+    let body = build_transaction_body(spec, placeholder_fee, None, sdh, network)?;
+    let witness_set_pass1 = build_witness_set(spec, exec_units)?;
     let tx: Tx = PseudoTx {
         transaction_body: body,
         transaction_witness_set: witness_set_pass1,
@@ -535,8 +702,8 @@ pub fn build_cbor_tx(spec: &TxSpec) -> Result<(Vec<u8>, u64, Vec<String>), TxBui
     };
 
     // Second pass with calculated fee and change output
-    let body = build_transaction_body(spec, fee, change_lovelace, sdh)?;
-    let witness_set_pass2 = build_witness_set(spec)?;
+    let body = build_transaction_body(spec, fee, change_lovelace, sdh, network)?;
+    let witness_set_pass2 = build_witness_set(spec, exec_units)?;
     let tx: Tx = PseudoTx {
         transaction_body: body,
         transaction_witness_set: witness_set_pass2,
@@ -556,6 +723,19 @@ mod tests {
     use crate::tx::builder::parse_tx_spec;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// Helper: build cbor tx with default test params (preview network, no exec-units, no cost model).
+    fn build_cbor_tx_test(spec: &TxSpec) -> Result<(Vec<u8>, u64, Vec<String>), TxBuildError> {
+        build_cbor_tx(spec, "preview", None, None)
+    }
+
+    /// Helper: build cbor tx with a dummy cost model so script_data_hash gets computed.
+    fn build_cbor_tx_with_cost_model(
+        spec: &TxSpec,
+    ) -> Result<(Vec<u8>, u64, Vec<String>), TxBuildError> {
+        let cm = serde_json::json!({"PlutusV3": []});
+        build_cbor_tx(spec, "preview", None, Some(&cm))
+    }
 
     /// A spec using valid 64-char hex tx hashes for proper CBOR encoding.
     fn cbor_spec_json() -> &'static str {
@@ -594,11 +774,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_utxo_ref_short_hash() -> TestResult {
-        // Short hash gets zero-padded
-        let input = parse_utxo_ref("abc123#5")?;
-        assert_eq!(input.index, 5);
-        Ok(())
+    fn test_parse_utxo_ref_short_hash_errors() {
+        // Short hash must now produce an error (no more zero-padding)
+        let result = parse_utxo_ref("abc123#5");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("exactly 64 hex chars"), "got: {err}");
     }
 
     #[test]
@@ -616,16 +797,18 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_address_fallback() -> TestResult {
-        let bytes = decode_address("addr_test1qz123")?;
-        assert!(!bytes.is_empty());
-        Ok(())
+    fn test_decode_address_invalid_errors() {
+        // Invalid bech32 and non-hex string must now produce an error (no raw fallback)
+        let result = decode_address("addr_test1qz123");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("invalid address"), "got: {err}");
     }
 
     #[test]
     fn test_build_cbor_tx_basic() -> TestResult {
         let spec = parse_tx_spec(cbor_spec_json())?;
-        let (cbor_bytes, fee, _warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, fee, _warnings) = build_cbor_tx_with_cost_model(&spec)?;
 
         assert!(!cbor_bytes.is_empty());
         assert!(fee > 0);
@@ -674,7 +857,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, _fee, _warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, _fee, _warnings) = build_cbor_tx_with_cost_model(&spec)?;
 
         let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
             .map_err(|e| format!("decode failed: {e}"))?;
@@ -690,7 +873,7 @@ mod tests {
     #[test]
     fn test_build_cbor_tx_roundtrip_hex() -> TestResult {
         let spec = parse_tx_spec(cbor_spec_json())?;
-        let (cbor_bytes, _fee, _warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, _fee, _warnings) = build_cbor_tx_test(&spec)?;
 
         // Hex encode then decode
         let hex_str = hex::encode(&cbor_bytes);
@@ -714,7 +897,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, fee, _warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, fee, _warnings) = build_cbor_tx_test(&spec)?;
 
         let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
             .map_err(|e| format!("decode failed: {e}"))?;
@@ -740,7 +923,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, fee, _warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, fee, _warnings) = build_cbor_tx_test(&spec)?;
 
         // Fee should be approximately: 44 * size + 155381
         let expected_approx = MIN_FEE_COEFFICIENT * (cbor_bytes.len() as u64) + MIN_FEE_CONSTANT;
@@ -759,7 +942,7 @@ mod tests {
     #[test]
     fn test_script_data_hash_set_when_scripts_present() -> TestResult {
         let spec = parse_tx_spec(cbor_spec_json())?;
-        let (cbor_bytes, _fee, _warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, _fee, _warnings) = build_cbor_tx_with_cost_model(&spec)?;
 
         let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
             .map_err(|e| format!("decode failed: {e}"))?;
@@ -783,7 +966,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, _fee, _warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, _fee, _warnings) = build_cbor_tx_test(&spec)?;
 
         let decoded: Tx = pallas_codec::minicbor::decode(&cbor_bytes)
             .map_err(|e| format!("decode failed: {e}"))?;
@@ -808,7 +991,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, fee, warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, fee, warnings) = build_cbor_tx_test(&spec)?;
 
         // No warnings when input values are provided
         assert!(
@@ -859,16 +1042,17 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (_cbor_bytes, _fee, warnings) = build_cbor_tx(&spec)?;
+        let (_cbor_bytes, _fee, warnings) = build_cbor_tx_test(&spec)?;
 
         assert!(
             !warnings.is_empty(),
             "expected a warning about missing input values"
         );
         assert!(
-            warnings[0].contains("input values not provided"),
-            "expected warning about input values, got: {}",
-            warnings[0]
+            warnings
+                .iter()
+                .any(|w| w.contains("input values not provided")),
+            "expected warning about input values, got: {warnings:?}"
         );
 
         Ok(())
@@ -886,7 +1070,7 @@ mod tests {
             "change_address": "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp"
         }"#;
         let spec = parse_tx_spec(json)?;
-        let result = build_cbor_tx(&spec);
+        let result = build_cbor_tx_test(&spec);
         assert!(
             result.is_err(),
             "expected error for insufficient input value"
@@ -924,7 +1108,7 @@ mod tests {
             "required_signers": ["aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"]
         }"#;
         let spec = parse_tx_spec(json)?;
-        let (cbor_bytes, fee, warnings) = build_cbor_tx(&spec)?;
+        let (cbor_bytes, fee, warnings) = build_cbor_tx_with_cost_model(&spec)?;
 
         assert!(warnings.is_empty(), "expected no warnings: {warnings:?}");
 
@@ -934,7 +1118,7 @@ mod tests {
         // 2 outputs: explicit + change
         assert_eq!(decoded.transaction_body.outputs.len(), 2);
 
-        // script_data_hash should also be set
+        // script_data_hash should also be set (cost model provided)
         assert!(decoded.transaction_body.script_data_hash.is_some());
 
         // Verify balance

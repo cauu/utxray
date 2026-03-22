@@ -261,6 +261,9 @@ pub fn build_tx(
     spec: &TxSpec,
     tx_file_path: &str,
     include_raw: bool,
+    network: &str,
+    exec_units: Option<&crate::tx::cbor_builder::ExecUnitsMap>,
+    cost_models: Option<&serde_json::Value>,
 ) -> Result<Output<serde_json::Value>, TxBuildError> {
     let scripts_invoked = extract_scripts_invoked(spec);
     let total_out = total_output_lovelace(spec);
@@ -268,7 +271,8 @@ pub fn build_tx(
     let outputs_count = spec.outputs.len();
 
     // Build real CBOR transaction
-    let (cbor_bytes, fee, build_warnings) = crate::tx::cbor_builder::build_cbor_tx(spec)?;
+    let (cbor_bytes, fee, build_warnings) =
+        crate::tx::cbor_builder::build_cbor_tx(spec, network, exec_units, cost_models)?;
     let cbor_hex = hex::encode(&cbor_bytes);
 
     // If we have actual input values, use them; otherwise estimate as output + fee
@@ -310,16 +314,43 @@ pub fn build_tx(
 /// Top-level entry point: read spec file, validate, build.
 pub fn run_tx_build(
     spec_path: &str,
-    _exec_units_path: Option<&str>,
+    exec_units_path: Option<&str>,
     tx_output_path: &str,
     include_raw: bool,
+    network: &str,
 ) -> Result<Output<serde_json::Value>, TxBuildError> {
     let spec_content = std::fs::read_to_string(spec_path)
         .map_err(|e| TxBuildError::ReadError(format!("{spec_path}: {e}")))?;
 
     let spec = parse_tx_spec(&spec_content)?;
     validate_tx_spec(&spec)?;
-    build_tx(&spec, tx_output_path, include_raw)
+
+    // Parse exec-units file if provided
+    let exec_units = match exec_units_path {
+        Some(path) => Some(crate::tx::cbor_builder::parse_exec_units_file(path)?),
+        None => None,
+    };
+
+    // Try to load cost models from cached protocol params
+    let cost_models = load_cached_cost_models();
+
+    build_tx(
+        &spec,
+        tx_output_path,
+        include_raw,
+        network,
+        exec_units.as_ref(),
+        cost_models.as_ref(),
+    )
+}
+
+/// Try to load cost models from a cached `.utxray/protocol-params.json` file.
+/// Returns None if the file doesn't exist or can't be parsed.
+fn load_cached_cost_models() -> Option<serde_json::Value> {
+    let path = Path::new(".utxray/protocol-params.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    json.get("cost_models").cloned()
 }
 
 /// Run tx build, returning Output (wrapping errors into error Output).
@@ -328,8 +359,15 @@ pub fn run_tx_build_safe(
     exec_units_path: Option<&str>,
     tx_output_path: &str,
     include_raw: bool,
+    network: &str,
 ) -> Output<serde_json::Value> {
-    match run_tx_build(spec_path, exec_units_path, tx_output_path, include_raw) {
+    match run_tx_build(
+        spec_path,
+        exec_units_path,
+        tx_output_path,
+        include_raw,
+        network,
+    ) {
         Ok(output) => output,
         Err(e) => Output::error(serde_json::json!({
             "error_code": "TX_BUILD_FAILED",
@@ -507,7 +545,7 @@ mod tests {
         let tx_path = dir.join("tx.unsigned");
         let tx_path_str = tx_path.to_string_lossy().to_string();
 
-        let output = build_tx(&spec, &tx_path_str, false)?;
+        let output = build_tx(&spec, &tx_path_str, false, "preview", None, None)?;
         let json = serde_json::to_value(&output)?;
 
         assert_eq!(json["status"], "ok");
@@ -537,7 +575,7 @@ mod tests {
         let tx_path = dir.join("tx.unsigned");
         let tx_path_str = tx_path.to_string_lossy().to_string();
 
-        let output = build_tx(&spec, &tx_path_str, true)?;
+        let output = build_tx(&spec, &tx_path_str, true, "preview", None, None)?;
         let json = serde_json::to_value(&output)?;
 
         assert_eq!(json["status"], "ok");
@@ -563,7 +601,13 @@ mod tests {
 
     #[test]
     fn test_run_tx_build_safe_file_not_found() -> TestResult {
-        let output = run_tx_build_safe("/nonexistent/spec.json", None, "/tmp/tx.unsigned", false);
+        let output = run_tx_build_safe(
+            "/nonexistent/spec.json",
+            None,
+            "/tmp/tx.unsigned",
+            false,
+            "preview",
+        );
         let json = serde_json::to_value(&output)?;
         assert_eq!(json["status"], "error");
         assert_eq!(json["error_code"], "TX_BUILD_FAILED");

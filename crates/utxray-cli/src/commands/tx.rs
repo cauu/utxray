@@ -108,6 +108,7 @@ pub async fn handle(cmd: TxCommands, ctx: &AppContext) -> anyhow::Result<()> {
                 exec_units_ref,
                 &tx_output_path,
                 ctx.include_raw,
+                &ctx.network,
             );
             print_output(&output)?;
             Ok(())
