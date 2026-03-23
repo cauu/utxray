@@ -338,12 +338,13 @@ prepare_keys_and_funding() {
     utxos="[]"
   fi
 
-  echo "$utxos" | jq '.[0] // null' > "$DATA/funding_utxo.json"
+  # Pick the UTxO with the largest lovelace balance
+  echo "$utxos" | jq '[.[] | . + {lovelace: (.amount[] | select(.unit=="lovelace") | .quantity | tonumber)}] | sort_by(-.lovelace) | .[0] // null' > "$DATA/funding_utxo.json"
 
   local utxo_ref
-  utxo_ref="$(echo "$utxos" | jq -r '.[0] | "\(.tx_hash)#\(.tx_index)"' 2>/dev/null || echo "null#null")"
+  utxo_ref="$(jq -r '"\(.tx_hash)#\(.tx_index)"' "$DATA/funding_utxo.json" 2>/dev/null || echo "null#null")"
   local lovelace
-  lovelace="$(echo "$utxos" | jq -r '.[0].amount[] | select(.unit=="lovelace") | .quantity' 2>/dev/null || echo "null")"
+  lovelace="$(jq -r '.lovelace' "$DATA/funding_utxo.json" 2>/dev/null || echo "null")"
 
   if [[ -z "$utxo_ref" || "$utxo_ref" == "null#null" || -z "$lovelace" || "$lovelace" == "null" ]]; then
     skip_or_fail "SETUP-LIVE" "funding" "live-read" "No funded UTxO found for $addr. Fund it via Preview faucet."
