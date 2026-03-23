@@ -303,25 +303,26 @@ prepare_keys_and_funding() {
 
   echo "=== Preparing keys and funding ==="
 
-  if ! command -v cardano-cli >/dev/null 2>&1; then
-    skip_or_fail "SETUP-LIVE" "funding" "live-setup" "cardano-cli not found"
+  # If keys already exist (pre-generated), use them directly
+  if [[ -f "$KEYS/me.skey" && -f "$KEYS/me.addr" ]]; then
+    echo "  Keys already exist, skipping generation"
+  elif command -v cardano-cli >/dev/null 2>&1; then
+    if [[ ! -f "$KEYS/me.skey" ]]; then
+      cardano-cli address key-gen \
+        --signing-key-file "$KEYS/me.skey" \
+        --verification-key-file "$KEYS/me.vkey"
+      echo "  Keys generated via cardano-cli"
+    fi
+    cardano-cli address build \
+      --payment-verification-key-file "$KEYS/me.vkey" \
+      --testnet-magic 2 \
+      --out-file "$KEYS/me.addr"
+    cardano-cli address key-hash \
+      --payment-verification-key-file "$KEYS/me.vkey" > "$KEYS/me.keyhash"
+  else
+    skip_or_fail "SETUP-LIVE" "funding" "live-setup" "No keys found and cardano-cli not available"
     return 0
   fi
-
-  if [[ ! -f "$KEYS/me.skey" ]]; then
-    cardano-cli address key-gen \
-      --signing-key-file "$KEYS/me.skey" \
-      --verification-key-file "$KEYS/me.vkey"
-    echo "  Keys generated"
-  fi
-
-  cardano-cli address build \
-    --payment-verification-key-file "$KEYS/me.vkey" \
-    --testnet-magic 2 \
-    --out-file "$KEYS/me.addr"
-
-  cardano-cli address key-hash \
-    --payment-verification-key-file "$KEYS/me.vkey" > "$KEYS/me.keyhash"
 
   local addr
   addr="$(cat "$KEYS/me.addr")"
@@ -627,7 +628,7 @@ stage_live_write() {
 
   # --- C26: tx build (live) ---
   run_case C26 "tx build (live)" "live-write" "ok" "0" \
-    cargo run -q -- --network "$UTXRAY_NETWORK" tx build --spec "$DATA/tx_spec_live.json"
+    cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" tx build --spec "$DATA/tx_spec_live.json"
 
   # Extract the built tx file path from C26 output
   local unsigned=""
@@ -643,15 +644,15 @@ stage_live_write() {
   else
     # --- C27: tx evaluate ---
     run_case C27 "tx evaluate" "live-write" "ok|error" "0|1" \
-      cargo run -q -- --network "$UTXRAY_NETWORK" tx evaluate --tx "$unsigned"
+      cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" tx evaluate --tx "$unsigned"
 
     # --- C28: tx simulate ---
     run_case C28 "tx simulate" "live-write" "ok|error" "0|1" \
-      cargo run -q -- --network "$UTXRAY_NETWORK" tx simulate --tx "$unsigned"
+      cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" tx simulate --tx "$unsigned"
 
     # --- C29: tx sign ---
     run_case C29 "tx sign" "live-write" "ok" "0" \
-      cargo run -q -- --network "$UTXRAY_NETWORK" tx sign \
+      cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" tx sign \
         --tx "$unsigned" \
         --signing-key "$KEYS/me.skey" \
         --out "$ART/tx.signed"
@@ -659,12 +660,12 @@ stage_live_write() {
 
   # --- C30: tx submit mainnet guard (should fail) ---
   run_case C30 "tx submit mainnet guard" "live-write" "error" "1" \
-    cargo run -q -- --network mainnet tx submit --tx deadbeef
+    cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network mainnet tx submit --tx deadbeef
 
   # --- C31: tx submit preview ---
   if [[ -f "$ART/tx.signed" ]]; then
     run_case C31 "tx submit preview" "live-write" "ok" "0" \
-      cargo run -q -- --network "$UTXRAY_NETWORK" tx submit --tx "$ART/tx.signed"
+      cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" tx submit --tx "$ART/tx.signed"
   else
     skip_or_fail C31 "tx submit preview" "live-write" "No signed tx (C29 failed or skipped)"
   fi
@@ -678,11 +679,14 @@ stage_live_write() {
 
   # Get current tip slot for the diff window
   local tip_slot=0
-  tip_slot="$(cargo run -q -- --network "$UTXRAY_NETWORK" context tip 2>/dev/null | jq -r '.slot // 0' 2>/dev/null || echo "0")"
-  local before_slot=$((tip_slot > 20 ? tip_slot - 20 : 0))
+  tip_slot="$(cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" context tip 2>/dev/null | jq -r '.slot // 0' 2>/dev/null || echo "0")"
+  local before_slot=0
+  if [[ "$tip_slot" -gt 20 ]]; then
+    before_slot=$((tip_slot - 20))
+  fi
 
   run_case C32 "utxo diff" "live-write" "ok|error" "0|1" \
-    cargo run -q -- --network "$UTXRAY_NETWORK" utxo diff \
+    cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" utxo diff \
       --address "$addr" \
       --before-slot "$before_slot" \
       --after-slot "$tip_slot"
