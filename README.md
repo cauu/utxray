@@ -31,13 +31,24 @@ Cardano smart contract development has a high debugging cost. Error messages fro
 - **Aiken** >= 1.1.0 ([install](https://aiken-lang.org/installation-instructions))
 - **Blockfrost API key** (for chain commands, [get one free](https://blockfrost.io/))
 
-### Install
+### Install (one-liner)
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/cauu/utxray/main/install.sh | bash
+```
+
+Or with a custom install directory:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/cauu/utxray/main/install.sh | UTXRAY_INSTALL_DIR=~/.local/bin bash
+```
+
+### Install from source
 
 ```bash
 git clone https://github.com/cauu/utxray.git
 cd utxray
-cargo build --release
-# Binary at target/release/utxray
+bash install.sh
 ```
 
 ### Configuration
