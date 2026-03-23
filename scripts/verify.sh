@@ -22,7 +22,8 @@ cargo test --workspace 2>&1 > /tmp/utxray-test.log || TEST_OK=false
 
 TEST_TOTAL=$(grep -c 'test .* \.\.\.' /tmp/utxray-test.log 2>/dev/null || echo 0)
 TEST_PASSED=$(grep -c '\.\.\.\ ok' /tmp/utxray-test.log 2>/dev/null || echo 0)
-TEST_FAILED=$((TEST_TOTAL - TEST_PASSED))
+TEST_IGNORED=$(grep -c '\.\.\.\ ignored' /tmp/utxray-test.log 2>/dev/null || echo 0)
+TEST_FAILED=$((TEST_TOTAL - TEST_PASSED - TEST_IGNORED))
 
 UNWRAP_COUNT=0
 if [ -d "crates/utxray-core/src" ]; then
@@ -252,6 +253,7 @@ cat > "$RESULT_FILE" << ENDJSON
   "test_summary": {
     "total": $TEST_TOTAL,
     "passed": $TEST_PASSED,
+    "ignored": $TEST_IGNORED,
     "failed": $TEST_FAILED
   },
   "phase_checks": { $PHASE_CHECKS },
