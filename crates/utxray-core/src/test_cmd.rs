@@ -123,7 +123,83 @@ pub async fn run_test(
 /// │ ↳ FAIL — current_slot 300 > deadline 200
 /// ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 /// ```
+/// Try to parse aiken's structured JSON test output (aiken v1.1+).
+/// Returns None if the output isn't valid aiken JSON.
+fn try_parse_json_test_output(output: &str) -> Option<Vec<TestResult>> {
+    // Find JSON object in the output (aiken may print compilation messages before it)
+    let json_start = output.find('{')?;
+    let json_str = &output[json_start..];
+
+    // The output may have trailing non-JSON text (e.g. stderr appended after stdout).
+    // Find the matching closing brace to extract only the JSON portion.
+    let mut depth = 0i32;
+    let mut json_end = json_str.len();
+    for (i, c) in json_str.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    json_end = i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let clean_json = &json_str[..json_end];
+    let parsed: serde_json::Value = serde_json::from_str(clean_json).ok()?;
+
+    let modules = parsed.get("modules")?.as_array()?;
+    let mut results = Vec::new();
+
+    for module in modules {
+        let module_name = module.get("name")?.as_str().unwrap_or("unknown");
+        let tests = module.get("tests")?.as_array()?;
+
+        for test in tests {
+            let title = test.get("title")?.as_str().unwrap_or("unknown");
+            let status = test.get("status")?.as_str().unwrap_or("unknown");
+            let eu = test
+                .get("execution_units")
+                .unwrap_or(&serde_json::Value::Null);
+            let cpu = eu.get("cpu").and_then(|v| v.as_u64()).unwrap_or(0);
+            let mem = eu.get("mem").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            let result_str = if status == "pass" { "pass" } else { "fail" };
+            let error_detail = if status != "pass" {
+                test.get("error")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            };
+
+            results.push(TestResult {
+                name: title.to_string(),
+                module: module_name.to_string(),
+                result: result_str.to_string(),
+                exec_units: ExecUnits { cpu, mem },
+                budget_source: "test".to_string(),
+                traces: vec![],
+                error_detail,
+            });
+        }
+    }
+
+    if results.is_empty() {
+        None
+    } else {
+        Some(results)
+    }
+}
+
 pub fn parse_test_output(output: &str) -> Vec<TestResult> {
+    // Try JSON parsing first (aiken v1.1+), fall back to box-drawing text
+    if let Some(results) = try_parse_json_test_output(output) {
+        return results;
+    }
+
     let mut results = Vec::new();
     let mut current_module = String::new();
     let mut current_result: Option<TestResult> = None;

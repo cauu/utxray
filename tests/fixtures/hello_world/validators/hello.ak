@@ -3,3 +3,7 @@ validator hello {
     True
   }
 }
+
+test hello_always_passes() {
+  hello.spend(None, Void, Void, Void)
+}

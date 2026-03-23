@@ -123,6 +123,14 @@ run_case() {
     pass=false
   fi
 
+  # Contract gate: output must have top-level "v" field
+  local has_v
+  has_v="$(jq -r '.v // "__missing__"' "$out" 2>/dev/null || echo "__missing__")"
+  if [[ "$has_v" == "__missing__" ]]; then
+    pass=false
+    echo "  [CONTRACT] missing 'v' field in output"
+  fi
+
   TOTAL_CASES=$((TOTAL_CASES + 1))
   if [[ "$pass" == "true" ]]; then
     PASSED_CASES=$((PASSED_CASES + 1))
@@ -215,24 +223,12 @@ prepare_aiken_project() {
   # If aiken build fails, try creating a fresh project.
   if command -v aiken >/dev/null 2>&1; then
     echo "  Checking if $PROJ_LOCAL compiles..."
-    if aiken build -d "$PROJ_LOCAL" 2>/dev/null; then
+    # Clean stale build artifacts and rebuild
+    rm -rf "$PROJ_LOCAL/build" "$PROJ_LOCAL/lib" "$PROJ_LOCAL/artifacts" "$PROJ_LOCAL/.aiken"
+    if (cd "$PROJ_LOCAL" && aiken build 2>/dev/null); then
       echo "  hello_world project compiles OK"
     else
-      echo "  [WARN] hello_world failed to compile, attempting to create fresh project..."
-      local tmp_proj="$VAL/tmp_aiken_proj"
-      rm -rf "$tmp_proj"
-      if aiken new "$tmp_proj" --project-name validation/test_proj 2>/dev/null; then
-        # Copy over the generated project as our local project
-        PROJ_LOCAL="$tmp_proj"
-        export PROJ_LOCAL
-        if aiken build -d "$PROJ_LOCAL" 2>/dev/null; then
-          echo "  Fresh aiken project created and compiles at $PROJ_LOCAL"
-        else
-          echo "  [WARN] Fresh aiken project also failed to compile"
-        fi
-      else
-        echo "  [WARN] aiken new failed; local aiken cases may fail"
-      fi
+      echo "  [WARN] hello_world failed to compile"
     fi
   else
     echo "  [WARN] aiken not found; skipping project check"
@@ -416,8 +412,8 @@ stage_local() {
   echo "  STAGE: local-real"
   echo "========================================="
 
-  # --- C01: env ---
-  run_case C01 "env" "local-real" "ok|error" "0|1" \
+  # --- C01: env (critical gate — must succeed) ---
+  run_case C01 "env" "local-real" "ok" "0" \
     cargo run -q -- env
 
   # --- C02: build ---
@@ -428,9 +424,22 @@ stage_local() {
   run_case C03 "typecheck" "local-real" "ok" "0" \
     cargo run -q -- --project "$PROJ_LOCAL" typecheck
 
-  # --- C04: test ---
+  # --- C04: test (critical: must actually execute tests, total > 0) ---
   run_case C04 "test" "local-real" "ok|mixed" "0" \
     cargo run -q -- --project "$PROJ_LOCAL" test
+
+  # Post-assertion: C04 must have total > 0
+  if [[ -f "$CASES/C04.stdout.json" ]]; then
+    local test_total
+    test_total="$(jq -r '.summary.total // 0' "$CASES/C04.stdout.json" 2>/dev/null || echo "0")"
+    if [[ "$test_total" -eq 0 ]]; then
+      echo "  [ASSERT FAIL] C04 test ran 0 tests — not a valid test verification"
+      PASSED_CASES=$((PASSED_CASES - 1))
+      FAILED_CASES=$((FAILED_CASES + 1))
+    else
+      echo "  [ASSERT] C04 ran $test_total test(s)"
+    fi
+  fi
 
   # --- C05: gen-context ---
   run_case C05 "gen-context" "local-real" "ok" "0" \
@@ -671,26 +680,72 @@ stage_live_write() {
     skip_or_fail C31 "tx submit preview" "live-write" "No signed tx (C29 failed or skipped)"
   fi
 
-  # --- C32: utxo diff ---
-  # Wait for the submitted tx to propagate
-  if [[ -f "$ART/tx.signed" ]]; then
-    echo "  Waiting 20s for tx propagation..."
-    sleep 20
-  fi
+  # --- C32: post-submit UTxO verification ---
+  # This is the REAL verification: after tx submit, the submitted tx_hash
+  # must appear in the address's UTxO set. This proves the state change.
+  if [[ -f "$CASES/C31.stdout.json" ]]; then
+    local submitted_tx_hash
+    submitted_tx_hash="$(jq -r '.tx_hash // empty' "$CASES/C31.stdout.json" 2>/dev/null || true)"
 
-  # Get current tip slot for the diff window
-  local tip_slot=0
-  tip_slot="$(cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" context tip 2>/dev/null | jq -r '.slot // 0' 2>/dev/null || echo "0")"
-  local before_slot=0
-  if [[ "$tip_slot" -gt 20 ]]; then
-    before_slot=$((tip_slot - 20))
-  fi
+    if [[ -n "$submitted_tx_hash" ]]; then
+      echo "  Waiting 40s for tx $submitted_tx_hash to propagate..."
+      sleep 40
 
-  run_case C32 "utxo diff" "live-write" "ok|error" "0|1" \
-    cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" utxo diff \
-      --address "$addr" \
-      --before-slot "$before_slot" \
-      --after-slot "$tip_slot"
+      # Query UTxOs and check that the submitted tx_hash is present
+      local utxo_out="$CASES/C32.stdout.json"
+      local utxo_err="$CASES/C32.stderr.log"
+
+      set +e
+      cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" \
+        utxo query --address "$addr" >"$utxo_out" 2>"$utxo_err"
+      local c32_rc=$?
+      set -e
+
+      local c32_status
+      c32_status="$(json_status "$utxo_out")"
+
+      # The REAL assertion: submitted tx_hash must appear in UTxO set
+      local tx_found=false
+      if jq -e --arg txh "$submitted_tx_hash" '.utxos[] | select(.tx_hash == $txh)' "$utxo_out" >/dev/null 2>&1; then
+        tx_found=true
+      fi
+
+      local c32_pass=true
+      if [[ "$c32_status" != "ok" ]]; then c32_pass=false; fi
+      if [[ "$c32_rc" -ne 0 ]]; then c32_pass=false; fi
+      if [[ "$tx_found" != "true" ]]; then
+        c32_pass=false
+        echo "  [ASSERT] submitted tx $submitted_tx_hash NOT found in UTxO set"
+      else
+        echo "  [ASSERT] submitted tx $submitted_tx_hash confirmed in UTxO set"
+      fi
+
+      # Check v field
+      local c32_v
+      c32_v="$(jq -r '.v // "__missing__"' "$utxo_out" 2>/dev/null || echo "__missing__")"
+      if [[ "$c32_v" == "__missing__" ]]; then
+        c32_pass=false
+        echo "  [CONTRACT] missing 'v' field"
+      fi
+
+      TOTAL_CASES=$((TOTAL_CASES + 1))
+      if [[ "$c32_pass" == "true" ]]; then
+        PASSED_CASES=$((PASSED_CASES + 1))
+        echo "--- [C32] post-submit UTxO verify (live-write) ---"
+        echo "  PASS (status=$c32_status, rc=$c32_rc, tx_found=$tx_found)"
+      else
+        FAILED_CASES=$((FAILED_CASES + 1))
+        echo "--- [C32] post-submit UTxO verify (live-write) ---"
+        echo "  FAIL (status=$c32_status, rc=$c32_rc, tx_found=$tx_found)"
+      fi
+
+      append_result "C32" "post-submit UTxO verify" "live-write" "$c32_rc" "$c32_status" "ok" "0" "$c32_pass" "$utxo_out" "$utxo_err"
+    else
+      skip_or_fail C32 "post-submit UTxO verify" "live-write" "No tx_hash from C31"
+    fi
+  else
+    skip_or_fail C32 "post-submit UTxO verify" "live-write" "C31 not executed"
+  fi
 }
 
 # =============================================================================
