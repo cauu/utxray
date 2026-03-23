@@ -1,0 +1,16 @@
+# Generated during validation runs - do not commit
+keys/me.skey
+keys/me.vkey
+keys/me.addr
+keys/me.keyhash
+data/*.json
+data/*.hex
+data/*.uplc
+data/*.txt
+artifacts/
+reports/cases/
+reports/results.ndjson
+reports/latest.json
+reports/latest.md
+config/
+tmp_aiken_proj/

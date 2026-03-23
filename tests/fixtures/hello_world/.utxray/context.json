@@ -1,0 +1,21 @@
+{
+  "validators": [
+    {
+      "name": "hello.hello.spend",
+      "purpose": "spend",
+      "hash": "d27ccc13fab5b782984a3d1f99353197ca1a81be069941ffc003ee75",
+      "test_status": "unknown"
+    },
+    {
+      "name": "hello.hello.else",
+      "purpose": "else",
+      "hash": "d27ccc13fab5b782984a3d1f99353197ca1a81be069941ffc003ee75",
+      "test_status": "unknown"
+    }
+  ],
+  "project": {
+    "name": "test/hello_world",
+    "version": "0.0.1"
+  },
+  "generated_at": "2026-03-23T02:12:59.930423+00:00"
+}

@@ -9,5 +9,3 @@ description = "A minimal Aiken project for testing"
 user = "test"
 project = "hello_world"
 platform = "github"
-
-[[dependencies]]
