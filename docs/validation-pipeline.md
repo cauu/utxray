@@ -87,6 +87,7 @@ v2 将“真实环境”拆成三层：
 | `tx sign` | `C29` |
 | `tx submit` | `C30` + `C31` |
 | `utxo diff` | `C32` |
+| post-submit UTxO verify | `C32B` |
 | `replay diff` | `C18` |
 | `budget show` | `C19` |
 | `budget compare` | `C19B` |

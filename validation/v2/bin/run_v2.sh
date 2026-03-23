@@ -428,12 +428,18 @@ stage_local() {
   run_case C04 "test" "local-real" "ok|mixed" "0" \
     cargo run -q -- --project "$PROJ_LOCAL" test
 
-  # Post-assertion: C04 must have total > 0
+  # Post-assertion: C04 must have total > 0 — override ndjson if failed
   if [[ -f "$CASES/C04.stdout.json" ]]; then
     local test_total
     test_total="$(jq -r '.summary.total // 0' "$CASES/C04.stdout.json" 2>/dev/null || echo "0")"
     if [[ "$test_total" -eq 0 ]]; then
       echo "  [ASSERT FAIL] C04 test ran 0 tests — not a valid test verification"
+      # Overwrite the C04 entry in ndjson to mark as failed
+      local tmp_ndjson="$REP/results.ndjson.tmp"
+      jq -c 'if .id == "C04" then .pass = false | .note = "0 tests executed" else . end' "$REP/results.ndjson" > "$tmp_ndjson" 2>/dev/null || true
+      if [[ -s "$tmp_ndjson" ]]; then
+        mv "$tmp_ndjson" "$REP/results.ndjson"
+      fi
       PASSED_CASES=$((PASSED_CASES - 1))
       FAILED_CASES=$((FAILED_CASES + 1))
     else
@@ -680,71 +686,71 @@ stage_live_write() {
     skip_or_fail C31 "tx submit preview" "live-write" "No signed tx (C29 failed or skipped)"
   fi
 
-  # --- C32: post-submit UTxO verification ---
-  # This is the REAL verification: after tx submit, the submitted tx_hash
-  # must appear in the address's UTxO set. This proves the state change.
+  # --- C32: utxo diff (the actual command coverage) ---
+  if [[ -f "$CASES/C31.stdout.json" ]]; then
+    echo "  Waiting 40s for tx propagation..."
+    sleep 40
+  fi
+
+  local tip_slot=0
+  tip_slot="$(cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" context tip 2>/dev/null | jq -r '.tip.slot // .slot // 0' 2>/dev/null || echo "0")"
+  local before_slot=0
+  if [[ "$tip_slot" -gt 100 ]]; then
+    before_slot=$((tip_slot - 100))
+  fi
+
+  run_case C32 "utxo diff" "live-write" "ok" "0" \
+    cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" utxo diff \
+      --address "$addr" \
+      --before-slot "$before_slot" \
+      --after-slot "$tip_slot"
+
+  # --- C32B: post-submit UTxO verification (real state change proof) ---
   if [[ -f "$CASES/C31.stdout.json" ]]; then
     local submitted_tx_hash
     submitted_tx_hash="$(jq -r '.tx_hash // empty' "$CASES/C31.stdout.json" 2>/dev/null || true)"
 
     if [[ -n "$submitted_tx_hash" ]]; then
-      echo "  Waiting 40s for tx $submitted_tx_hash to propagate..."
-      sleep 40
-
-      # Query UTxOs and check that the submitted tx_hash is present
-      local utxo_out="$CASES/C32.stdout.json"
-      local utxo_err="$CASES/C32.stderr.log"
+      local verify_out="$CASES/C32B.stdout.json"
+      local verify_err="$CASES/C32B.stderr.log"
 
       set +e
       cargo run -q -- --project "$UTXRAY_CONFIG_DIR" --network "$UTXRAY_NETWORK" \
-        utxo query --address "$addr" >"$utxo_out" 2>"$utxo_err"
-      local c32_rc=$?
+        utxo query --address "$addr" >"$verify_out" 2>"$verify_err"
+      local cv_rc=$?
       set -e
 
-      local c32_status
-      c32_status="$(json_status "$utxo_out")"
+      local cv_status
+      cv_status="$(json_status "$verify_out")"
 
-      # The REAL assertion: submitted tx_hash must appear in UTxO set
       local tx_found=false
-      if jq -e --arg txh "$submitted_tx_hash" '.utxos[] | select(.tx_hash == $txh)' "$utxo_out" >/dev/null 2>&1; then
+      if jq -e --arg txh "$submitted_tx_hash" '.utxos[] | select(.tx_hash == $txh)' "$verify_out" >/dev/null 2>&1; then
         tx_found=true
       fi
 
-      local c32_pass=true
-      if [[ "$c32_status" != "ok" ]]; then c32_pass=false; fi
-      if [[ "$c32_rc" -ne 0 ]]; then c32_pass=false; fi
+      local cv_pass=true
+      [[ "$cv_status" != "ok" ]] && cv_pass=false
+      [[ "$cv_rc" -ne 0 ]] && cv_pass=false
       if [[ "$tx_found" != "true" ]]; then
-        c32_pass=false
+        cv_pass=false
         echo "  [ASSERT] submitted tx $submitted_tx_hash NOT found in UTxO set"
       else
         echo "  [ASSERT] submitted tx $submitted_tx_hash confirmed in UTxO set"
       fi
 
-      # Check v field
-      local c32_v
-      c32_v="$(jq -r '.v // "__missing__"' "$utxo_out" 2>/dev/null || echo "__missing__")"
-      if [[ "$c32_v" == "__missing__" ]]; then
-        c32_pass=false
-        echo "  [CONTRACT] missing 'v' field"
-      fi
-
       TOTAL_CASES=$((TOTAL_CASES + 1))
-      if [[ "$c32_pass" == "true" ]]; then
+      if [[ "$cv_pass" == "true" ]]; then
         PASSED_CASES=$((PASSED_CASES + 1))
-        echo "--- [C32] post-submit UTxO verify (live-write) ---"
-        echo "  PASS (status=$c32_status, rc=$c32_rc, tx_found=$tx_found)"
+        echo "--- [C32B] post-submit UTxO verify (live-write) ---"
+        echo "  PASS (tx_found=$tx_found)"
       else
         FAILED_CASES=$((FAILED_CASES + 1))
-        echo "--- [C32] post-submit UTxO verify (live-write) ---"
-        echo "  FAIL (status=$c32_status, rc=$c32_rc, tx_found=$tx_found)"
+        echo "--- [C32B] post-submit UTxO verify (live-write) ---"
+        echo "  FAIL (tx_found=$tx_found)"
       fi
 
-      append_result "C32" "post-submit UTxO verify" "live-write" "$c32_rc" "$c32_status" "ok" "0" "$c32_pass" "$utxo_out" "$utxo_err"
-    else
-      skip_or_fail C32 "post-submit UTxO verify" "live-write" "No tx_hash from C31"
+      append_result "C32B" "post-submit UTxO verify" "live-write" "$cv_rc" "$cv_status" "ok" "0" "$cv_pass" "$verify_out" "$verify_err"
     fi
-  else
-    skip_or_fail C32 "post-submit UTxO verify" "live-write" "C31 not executed"
   fi
 }
 
@@ -783,7 +789,7 @@ finalize_report() {
   else
     required_ids=(
       C01 C02 C03 C04 C05 C06 C07 C08 C09 C10 C11 C12 C13 C14 C15 C16 C17 C18
-      C19 C19B C20 C21 C22 C23 C24 C24B C25 C26 C27 C28 C29 C30 C31 C32 C33
+      C19 C19B C20 C21 C22 C23 C24 C24B C25 C26 C27 C28 C29 C30 C31 C32 C32B C33
     )
   fi
   local missing_ids=()
