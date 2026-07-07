@@ -15,6 +15,7 @@
 name: site
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'site/**'
@@ -109,7 +110,9 @@ jobs:
 
   deploy:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:
