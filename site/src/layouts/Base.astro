@@ -1,0 +1,114 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+  navTheme?: 'overlay' | 'light';
+}
+
+const {
+  title = 'utxray — the quality gate for Cardano smart contracts',
+  description =
+    'utxray is an agent-native CLI that interrogates Cardano/Aiken contracts across five layers — toolchain, contract, schemas, behavior, chain — and returns every verdict as structured JSON. Contracts ship when the gate says pass.',
+  navTheme = 'overlay',
+} = Astro.props;
+
+const gh = 'https://github.com/cauu/utxray';
+---
+
+<!doctype html>
+<html lang="en" class="js">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <nav class:list={['nav', { light: navTheme === 'light' }]} aria-label="Main">
+      <div class="wrap nav-inner">
+        <a href="/" class="nav-logo">
+          <svg width="26" height="26" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <path d="M4 4h6M4 4v6M24 4h-6M24 4v6M4 24h6M4 24v-6M24 24h-6M24 24v-6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+            <path d="M9.6 14.4l3 3 6-6.6" stroke="var(--sky)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>utxray</span>
+        </a>
+        <div class="nav-right">
+          <a href="/llms.txt" class="nav-a ep">/llms.txt</a>
+          <a href={gh} class="nav-a" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </nav>
+
+    <slot />
+
+    <footer class="footer">
+      <div class="wrap footer-inner">
+        <span class="footer-name">
+          <svg width="18" height="18" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <path d="M4 4h6M4 4v6M24 4h-6M24 4v6M4 24h6M4 24v-6M24 24h-6M24 24v-6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+            <path d="M9.6 14.4l3 3 6-6.6" stroke="var(--sea)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          utxray
+        </span>
+        <span>© 2026 <a href="https://www.paopao.studio" class="footer-studio" target="_blank" rel="noopener">Pao Studio</a></span>
+      </div>
+    </footer>
+
+    <script>
+      // reveal on scroll
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (e.isIntersecting) {
+              e.target.classList.add('in');
+              io.unobserve(e.target);
+            }
+          }
+        },
+        { threshold: 0.1 }
+      );
+      document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+
+      // copy buttons: copy the text of the element referenced by data-copy
+      let toastEl: HTMLDivElement | null = null;
+      let toastTimer: ReturnType<typeof setTimeout>;
+      function toast(html: string) {
+        if (!toastEl) {
+          toastEl = document.createElement('div');
+          toastEl.className = 'toast';
+          toastEl.setAttribute('role', 'status');
+          document.body.appendChild(toastEl);
+        }
+        toastEl.innerHTML = html;
+        toastEl.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toastEl?.classList.remove('show'), 3600);
+      }
+
+      document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const src = document.querySelector(btn.dataset.copy!);
+          if (!src) return;
+          await navigator.clipboard.writeText((src as HTMLElement).innerText.trim());
+          const old = btn.textContent;
+          btn.textContent = 'copied';
+          setTimeout(() => (btn.textContent = old), 1400);
+          toast(
+            btn.dataset.copiedMsg ??
+              'Copied. Now <b>paste it into your agent\'s chat</b> — Claude Code, Cursor, anything with a shell.'
+          );
+        });
+      });
+    </script>
+  </body>
+</html>

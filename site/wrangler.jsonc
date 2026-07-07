@@ -1,0 +1,11 @@
+// Assets-only Worker — no script, just static hosting for the built site.
+// Deployed by Cloudflare Workers Builds (git integration); same pattern as ouro-pass-site.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "utxray-site",
+  "compatibility_date": "2026-07-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page"
+  }
+}

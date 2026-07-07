@@ -1,0 +1,22 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="404 — utxray" navTheme="light">
+  <section class="section" style="text-align:center; padding:120px 0">
+    <div class="wrap">
+      <span class="sec-label">404</span>
+      <h1 style="font-size:clamp(30px,3.4vw,44px); letter-spacing:-1.2px; margin-bottom:14px">
+        No UTxO at this address.
+      </h1>
+      <p style="max-width:32em; margin:0 auto 28px; color:var(--body)">
+        The path you queried doesn't exist. If you're an agent, start at
+        <code style="font-family:var(--mono); background:var(--card); border-radius:6px; padding:2px 7px">/llms.txt</code>.
+      </p>
+      <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap">
+        <a href="/" class="btn btn-primary">Back home</a>
+        <a href="/llms.txt" class="btn btn-secondary">/llms.txt</a>
+      </div>
+    </div>
+  </section>
+</Base>

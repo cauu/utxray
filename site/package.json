@@ -1,0 +1,17 @@
+{
+  "name": "utxray-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "sync": "cp ../skills/aiken-contract-dev/SKILL.md public/skill.md && cp ../docs/command-manifest.md public/manifest.md && cp ../install.sh public/install.sh",
+    "predev": "npm run sync",
+    "dev": "astro dev",
+    "prebuild": "npm run sync",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "astro": "^4.16.0"
+  }
+}
