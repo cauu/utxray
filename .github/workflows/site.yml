@@ -1,0 +1,128 @@
+# Website CI/CD (site/ only). Same pattern as ouro-pass.
+#
+#   pull_request  → build check (all PRs, incl. forks — no secrets needed)
+#                 → preview deploy + PR comment (same-repo PRs only)
+#   push to main  → production deploy (environment: production)
+#
+# The site build syncs agent endpoints from the repo root
+# (skills/aiken-contract-dev/SKILL.md → /skill.md, docs/command-manifest.md
+# → /manifest.md, install.sh → /install.sh), so changes to those files also
+# trigger a deploy — the published endpoints must never drift from the repo.
+#
+# Fork PRs never see secrets (GitHub guarantee for `pull_request`); do NOT
+# switch this to `pull_request_target`.
+
+name: site
+
+on:
+  pull_request:
+    paths:
+      - 'site/**'
+      - '.github/workflows/site.yml'
+      - 'skills/aiken-contract-dev/SKILL.md'
+      - 'docs/command-manifest.md'
+      - 'install.sh'
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/site.yml'
+      - 'skills/aiken-contract-dev/SKILL.md'
+      - 'docs/command-manifest.md'
+      - 'install.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site-dist
+          path: site/dist
+          retention-days: 1
+
+  # Preview deploy — same-repo PRs only: fork PRs cannot read secrets, so this
+  # job is skipped for them (they still get the build check above).
+  preview:
+    needs: build
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: site-dist
+          path: site/dist
+      - id: upload
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: site
+          # wrangler v4 is required: v3 can't read wrangler.jsonc / assets-only config
+          wranglerVersion: '4.107.0'
+          command: versions upload
+      # wrangler-action doesn't set deployment-url for `versions upload`
+      # (cloudflare/wrangler-action#343) — grep it from the command output.
+      - name: Comment preview URL on the PR
+        uses: actions/github-script@v7
+        env:
+          CMD_OUT: ${{ steps.upload.outputs.command-output }}
+        with:
+          script: |
+            const m = (process.env.CMD_OUT || '').match(/https:\/\/[^\s]+\.workers\.dev/);
+            if (!m) { core.notice('No preview URL found in wrangler output'); return; }
+            const marker = '<!-- site-preview -->';
+            const body = `${marker}\n🔍 **Site preview:** ${m[0]}`;
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: context.issue.number
+            });
+            const prev = comments.find((c) => c.body && c.body.includes(marker));
+            if (prev) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: prev.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+            }
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: site-dist
+          path: site/dist
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: site
+          # wrangler v4 is required: v3 can't read wrangler.jsonc / assets-only config
+          wranglerVersion: '4.107.0'
+          command: deploy
